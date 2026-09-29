@@ -61,8 +61,9 @@ jarvis/
 hud/            gaze + hand HUD
 dashboard/      mouse map
 vault/          the only folder file tools may touch
+vendor/         force-graph, committed so the surfaces work with no network
 docs/           the four volumes of the build manual
-tests/          58 tests, no model, no network, no credentials
+tests/          63 tests, plus on-demand browser and live-socket checks
 mcp.json        every door in one file
 ```
 
@@ -110,10 +111,27 @@ The bridge, not the browser, decides what each surface may answer. A compromised
 ## Tests
 
 ```bash
-pytest -q          # 58 tests: no model, no network, no credentials
+pytest -q          # 63 tests: no model, no network, no credentials
 ```
 
-They cover the vault path lock, the confirm gate end to end (reject must actually prevent the write), the registry invariants, the bridge (surface policy, one-time codes, replay, halt), the connector loader dropping undeclared tools, and both browser surfaces (snapshot freshness, pinned CDN versions, no gesture path to approve).
+They cover the vault path lock, the confirm gate end to end (reject must actually prevent the write), the registry invariants, the bridge (surface policy, one-time codes, replay, halt), the connector loader dropping undeclared tools, and both browser surfaces (snapshot freshness, pinned versions, no gesture path to approve).
+
+Two checks need more than a test file, so they run on demand and in CI:
+
+```bash
+# a real browser: fails on any console error, proves the graph drew pixels,
+# drives the gate strip, writes screenshots to /tmp/shots
+python -m http.server 8099 &
+python tests/browser_check.py
+
+# a real socket: gate raised, voice surface refused, wrong code refused,
+# replay is a no-op, the right code approves, halt rejects
+python tests/live_check.py
+```
+
+## Offline
+
+Both surfaces work with no network at all. `vendor/force-graph.min.js` is committed, the graph data is embedded into each page on every build, and the tracking library is loaded by a dynamic `import()` inside the start-tracking handler rather than at the top of the module. An unreachable CDN costs you eye and hand tracking and nothing else; if even the graph library is missing, the page prints the roster as text instead of going black.
 
 ## Docs
 

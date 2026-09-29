@@ -69,8 +69,43 @@ def test_all_external_scripts_are_version_pinned(page):
 def test_hud_imports_the_esm_entry_not_the_bare_package():
     """A bare jsdelivr package URL can resolve to the CommonJS build and fail the import."""
     text = (REPO / "hud" / "index.html").read_text(encoding="utf-8")
-    assert "tasks-vision@0.10.14/vision_bundle.mjs" in text
-    assert "tasks-vision@0.10.14/wasm" in text
+    assert 'VISION_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14"' in text
+    assert "${VISION_CDN}/vision_bundle.mjs" in text
+    assert "${VISION_CDN}/wasm" in text
+
+
+def test_tracking_library_is_loaded_lazily_not_at_module_top():
+    """A static top-level import of a CDN module makes the whole HUD hostage to
+    that CDN: one failed fetch and the module never runs, so the map, the node
+    contracts and the gate strip die with it."""
+    text = (REPO / "hud" / "index.html").read_text(encoding="utf-8")
+    static = re.findall(r"^\s*import\s+[^(]", text, re.M)
+    assert not static, f"top-level static import(s) in the HUD: {static}"
+    assert "await import(`${VISION_CDN}/vision_bundle.mjs`)" in text
+    # and the failure is reported to the user, not swallowed
+    assert "tracking library unreachable" in text
+
+
+@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.parent.name)
+def test_graph_library_is_vendored_locally_first(page):
+    """The surfaces must render with no network at all."""
+    text = page.read_text(encoding="utf-8")
+    assert '<script src="../vendor/force-graph.min.js"></script>' in text
+    local = text.index("../vendor/force-graph.min.js")
+    cdn = text.index("unpkg.com/force-graph")
+    assert local < cdn, "the CDN copy must only be a fallback, loaded after the local one"
+    assert (REPO / "vendor" / "force-graph.min.js").exists()
+    assert (REPO / "vendor" / "force-graph.LICENSE").exists()
+
+
+@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.parent.name)
+def test_no_graph_library_still_shows_the_roster(page):
+    """No library must never mean a black screen."""
+    text = page.read_text(encoding="utf-8")
+    assert "const HAVE_LIB = typeof ForceGraph === \"function\"" in text
+    assert "function fallbackRoster(data)" in text
+    assert "if (!HAVE_LIB) { fallbackRoster(data); return; }" in text
+    assert "Graph library did not load." in text
 
 
 def test_hud_falls_back_when_fetch_fails():

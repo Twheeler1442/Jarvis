@@ -40,6 +40,7 @@ voice = [
 dev = [
     "pytest>=8.0",
     "fastapi>=0.110",
+    "websockets>=12.0",      # tests/live_check.py drives a real socket
 ]
 
 [project.scripts]

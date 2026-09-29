@@ -183,7 +183,9 @@ async def resolve_gate(msg: dict, surface: str, ws: WebSocket | None = None) -> 
     if item["cls"] not in allowed:
         if ws:
             await ws.send_text(json.dumps({"type": "error", "id": gid,
-                "text": f"{surface} may not approve a {item['cls']} write. Approve it from the CLI."}))
+                "text": f"{surface} may not approve "
+                        f"{'an' if item['cls'][0] in 'aeiou' else 'a'} {item['cls']} write. "
+                        f"Approve it from the CLI."}))
         return "refused-by-policy"
 
     # External writes echo a one time code, so a stored gesture, a stuck key, or a
