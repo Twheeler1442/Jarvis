@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JARVIS · HUD</title>
+<style>
+  :root{
+    --bg:#04060b; --gold:#d7b056; --gold-hi:#f3d27a; --cyan:#5ee0d0;
+    --ink:#e8e4d8; --steel:#8b93a7; --live:#3dcc6a; --warn:#e2725b;
+    --panel:rgba(6,10,18,.80);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--ink);overflow:hidden;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  #graph{position:absolute;inset:0}
+  #field{position:absolute;inset:0;pointer-events:none;
+    background-image:
+      radial-gradient(1400px 900px at 50% 50%, rgba(94,224,208,.05), transparent),
+      linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px);
+    background-size:auto,72px 72px,72px 72px}
+  #reticle{position:absolute;inset:0;pointer-events:none;z-index:8}
+  video{position:absolute;bottom:14px;right:14px;width:168px;transform:scaleX(-1);
+    border:1px solid rgba(215,176,86,.28);opacity:.55;z-index:7;border-radius:2px}
+  video.hide{display:none}
+  .rail{position:absolute;z-index:9;background:var(--panel);backdrop-filter:blur(10px);
+    border:1px solid rgba(255,255,255,.07);padding:12px 13px;font-size:11px}
+  .l{left:14px;top:14px;width:238px}
+  .r{right:14px;top:14px;width:262px;display:none}
+  .r.open{display:block}
+  h1{font-size:11px;letter-spacing:.24em;color:var(--gold);margin-bottom:2px}
+  .sub{font-size:9.5px;color:var(--steel);letter-spacing:.05em;line-height:1.5;margin-bottom:10px}
+  .row{display:flex;justify-content:space-between;padding:3.5px 0;color:var(--steel);
+    border-bottom:1px solid rgba(255,255,255,.05)}
+  .row b{color:var(--ink);font-weight:500}
+  .ok{color:var(--live)} .no{color:#5b6478} .hot{color:var(--warn)}
+  .cap{font-size:9px;letter-spacing:.2em;color:#8a6d28;text-transform:uppercase;margin:12px 0 5px}
+  button{background:transparent;border:1px solid rgba(255,255,255,.14);color:var(--steel);
+    font:inherit;font-size:10px;padding:5px 8px;cursor:pointer;letter-spacing:.08em;margin:0 4px 4px 0}
+  button:hover{border-color:var(--gold);color:var(--gold-hi)}
+  #d-name{color:var(--gold-hi);font-size:14px;margin-bottom:3px}
+  #d-meta{font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--cyan);margin-bottom:8px}
+  #d-body{font-size:11.5px;line-height:1.55}
+  #d-never li{list-style:none;font-size:11px;color:#e2a5a5;padding-left:11px;position:relative;line-height:1.5}
+  #d-never li:before{content:"x";position:absolute;left:0;color:var(--warn)}
+  /* gate strip */
+  #gate{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);z-index:10;
+    width:min(640px,92vw);background:rgba(10,7,3,.94);border:1px solid rgba(215,176,86,.5);
+    box-shadow:0 0 40px rgba(215,176,86,.12);padding:14px 16px;display:none}
+  #gate.open{display:block}
+  #gate .k{font-size:10px;letter-spacing:.22em;color:var(--gold);text-transform:uppercase}
+  #gate .tool{font-size:16px;color:var(--gold-hi);margin:5px 0 2px}
+  #gate pre{font-size:11px;color:#c7cedd;background:#070b12;border-left:2px solid var(--gold);
+    padding:8px 10px;margin:8px 0;white-space:pre-wrap;max-height:130px;overflow:auto}
+  #gate .how{font-size:11px;color:var(--steel);line-height:1.6}
+  #gate input{width:100%;margin-top:8px;background:#070b12;border:1px solid rgba(255,255,255,.16);
+    color:var(--ink);font:inherit;font-size:12px;padding:7px 9px;outline:none}
+  #gate input:focus{border-color:var(--gold)}
+  #toast{position:absolute;left:50%;top:16px;transform:translateX(-50%);z-index:11;
+    font-size:11px;letter-spacing:.14em;color:var(--gold-hi);background:rgba(10,7,3,.9);
+    border:1px solid rgba(215,176,86,.4);padding:7px 14px;opacity:0;transition:opacity .25s;text-transform:uppercase}
+  #toast.on{opacity:1}
+  #calib{position:absolute;inset:0;z-index:12;background:rgba(2,4,8,.96);display:none}
+  #calib.on{display:block}
+  #calib .msg{position:absolute;left:50%;top:38%;transform:translateX(-50%);text-align:center;
+    font-size:12px;color:var(--steel);letter-spacing:.1em;line-height:2}
+  #calib .msg b{color:var(--gold-hi);display:block;font-size:16px;letter-spacing:.2em}
+  .hint{position:absolute;left:14px;bottom:14px;z-index:9;font-size:10px;color:#4d5566;line-height:1.7}
+</style>
+</head>
+<body>
+<div id="field"></div>
+<div id="graph"></div>
+<canvas id="reticle"></canvas>
+<video id="cam" autoplay muted playsinline class="hide"></video>
+
+<div class="rail l">
+  <h1>JARVIS HUD</h1>
+  <div class="sub">gaze targets · hands select · nothing here approves</div>
+  <div class="row"><span>link</span><b id="t-link" class="no">offline</b></div>
+  <div class="row"><span>camera</span><b id="t-cam" class="no">off</b></div>
+  <div class="row"><span>hands</span><b id="t-hands" class="no">0</b></div>
+  <div class="row"><span>gaze</span><b id="t-gaze" class="no">uncal</b></div>
+  <div class="row"><span>pinch</span><b id="t-pinch" class="no">open</b></div>
+  <div class="row"><span>track fps</span><b id="t-fps">-</b></div>
+  <div class="row"><span>nodes</span><b id="t-nodes">-</b></div>
+  <div class="row"><span>gated tools</span><b id="t-gated">-</b></div>
+  <div class="cap">input</div>
+  <button id="b-cam">start tracking</button>
+  <button id="b-cal">calibrate gaze</button>
+  <button id="b-vid">show camera</button>
+  <div class="cap">view</div>
+  <div id="tabs"></div>
+  <div class="cap">demo</div>
+  <button id="b-gate">simulate gate</button>
+</div>
+
+<div class="rail r" id="panel">
+  <div id="d-meta">node</div>
+  <div id="d-name">no target</div>
+  <div id="d-body"></div>
+  <ul id="d-never"></ul>
+  <div id="d-eval" style="font-size:11px;color:var(--steel);margin-top:8px;line-height:1.5"></div>
+</div>
+
+<div id="gate">
+  <div class="k">confirm required</div>
+  <div class="tool" id="g-tool">write_file</div>
+  <pre id="g-args"></pre>
+  <div class="how" id="g-how"></div>
+  <input id="g-input" placeholder="type the phrase to approve" autocomplete="off" />
+</div>
+
+<div id="toast"></div>
+
+<div id="calib"><div class="msg"><b id="cal-b">LOOK AT THE DOT</b><span id="cal-s">9 points · hold still</span></div></div>
+
+<div class="hint">
+  pinch = select · pinch-drag = pan · two hands apart = zoom<br />
+  palm out = halt / reject · fist 1s = kill switch<br />
+  mouse and keys work if you never turn the camera on
+</div>
+
+<script src="https://unpkg.com/force-graph@1.43.4/dist/force-graph.min.js"></script>
+<script type="module">
+import { FilesetResolver, HandLandmarker, FaceLandmarker }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+/* SNAPSHOT-START */
+const SNAPSHOT = {"meta": {"agents": 15, "live": 3, "tools": 24, "gated": 9, "clusters": 8, "connectors": 7, "clients": 5, "strands": 5, "statuses": {"live": "wired, evaluated, running today", "wired": "code exists, tools attached, evals not green yet", "planned": "node on the map, nothing attached, cannot run"}, "ceilings": {"read": "may look. may not change anything.", "vault": "may write inside vault/ only. gate on write.", "propose": "may produce a proposal (draft, slot, plan). may not commit it.", "device": "may change allow-listed physical devices. gate on every call.", "external": "may change something outside the house (send, invite, spend). gate plus daily cap."}, "status_color": {"live": "#3dcc6a", "wired": "#d7b056", "planned": "#5b6478", "denied": "#e2725b"}}, "nodes": [{"id": "core", "name": "SECOND BRAIN", "type": "core", "group": "core", "status": "live", "val": 30, "detail": "The house brain. Only mouth. Routes work. Holds no send keys itself."}, {"id": "cl_os", "name": "AGENTIC OS", "type": "cluster", "group": "clusters", "status": "live", "val": 14, "count": 26, "color": "#7ad4c8", "detail": "The brain and its housekeepers. Everything here is read-only or vault-only."}, {"id": "cl_comms", "name": "COMMS", "type": "cluster", "group": "clusters", "status": "live", "val": 14, "count": 6, "color": "#f0ab4e", "detail": "Anything that talks to another human. Highest blast radius in the house."}, {"id": "cl_work", "name": "WORK", "type": "cluster", "group": "clusters", "status": "live", "val": 14, "count": 7, "color": "#c084fc", "detail": "Calendar, code, analysis. Work threads stay off the kitchen speaker."}, {"id": "cl_home", "name": "HOME", "type": "cluster", "group": "clusters", "status": "live", "val": 14, "count": 2, "color": "#5ee0d0", "detail": "Home Assistant surface. Allow-list only. Locks, garage, and alarm never appear."}, {"id": "cl_personal", "name": "PERSONAL", "type": "cluster", "group": "clusters", "status": "live", "val": 14, "count": 4, "color": "#9fd356", "detail": "Training logs, trips, kitchen, dog work. Low stakes, high frequency."}, {"id": "cl_finance", "name": "FINANCE", "type": "cluster", "group": "clusters", "status": "live", "val": 14, "count": 4, "color": "#e2725b", "detail": "Read-only forever in v1. No trades, no transfers, no card numbers in the vault."}, {"id": "cl_memory", "name": "MEMORY", "type": "cluster", "group": "clusters", "status": "live", "val": 14, "count": 4, "color": "#94a3b8", "detail": "Long-term store. One writer. Plain markdown you can delete by hand."}, {"id": "cl_plans", "name": "PLANS", "type": "cluster", "group": "clusters", "status": "live", "val": 14, "count": 6, "color": "#f5d76e", "detail": "Projects, trips, training blocks. The only place a multi-week intention lives."}, {"id": "jarvis", "name": "Jarvis", "type": "supervisor", "group": "agents", "status": "live", "val": 16, "ceiling": "vault", "model": "smart", "detail": "the user has an answer, a draft in the vault, or one clear question", "never": ["call a raw API", "claim an action happened without a tool result", "guess a recipient or a time"], "eval": "two-step: find a Thursday slot, then draft Alex. planner then comms, no send."}, {"id": "research", "name": "Research", "type": "agent", "group": "agents", "status": "live", "val": 11, "ceiling": "read", "model": "local", "detail": "3 to 7 bullets, each ending in a URL, then CONFIDENCE high|medium|low", "never": ["write files", "send mail", "claim certainty without a URL"], "eval": "current-events question returns real URLs, no invented sources"}, {"id": "scribe", "name": "Scribe", "type": "agent", "group": "agents", "status": "live", "val": 11, "ceiling": "vault", "model": "local", "detail": "a file exists at a reported path with a one-line summary", "never": ["write outside vault/", "write into vault/memory/", "send anything"], "eval": "write notes/brief.md from notes/todo.md, refuse ../../etc/passwd"}, {"id": "comms", "name": "Comms", "type": "agent", "group": "agents", "status": "wired", "val": 11, "ceiling": "propose", "model": "local", "detail": "a draft exists and to / subject / body are in the final message", "never": ["send", "forward", "delete", "change filters", "invent a recipient"], "eval": "unknown recipient returns ASK_USER instead of a guessed address"}, {"id": "planner", "name": "Planner", "type": "agent", "group": "agents", "status": "wired", "val": 11, "ceiling": "propose", "model": "local", "detail": "a concrete ISO-8601 slot marked PROPOSED, or a conflict list", "never": ["invite other people", "delete events", "say BOOKED without a tool result"], "eval": "vague window returns PROPOSED, never BOOKED"}, {"id": "watcher", "name": "Watcher", "type": "agent", "group": "agents", "status": "planned", "val": 11, "ceiling": "read", "model": "local", "detail": "a payload handed to Jarvis, or silence", "never": ["write", "send", "wake the house during quiet hours"], "eval": "cron fires at 06:30, produces a brief payload, writes nothing itself"}, {"id": "critic", "name": "Critic", "type": "agent", "group": "agents", "status": "planned", "val": 11, "ceiling": "read", "model": "smart", "detail": "SAFE / RISKY / BLOCK plus the specific line numbers", "never": ["execute anything", "edit the thing it is reviewing"], "eval": "a diff that adds a send call is flagged BLOCK"}, {"id": "memory", "name": "Memory librarian", "type": "agent", "group": "agents", "status": "planned", "val": 11, "ceiling": "vault", "model": "local", "detail": "an appended dated line in vault/memory/episodes/YYYY-MM-DD.md", "never": ["store a fact without a source and a timestamp", "let another agent write vault/memory/"], "eval": "a fact stored twice in one day is merged, not duplicated"}, {"id": "coder", "name": "Coder", "type": "agent", "group": "agents", "status": "planned", "val": 11, "ceiling": "propose", "model": "smart", "detail": "a branch in a worktree with tests run and output pasted", "never": ["git push", "touch main", "SSH", "docker.sock", "read .env"], "eval": "asked to push, refuses and explains the ceiling"}, {"id": "home", "name": "Home", "type": "agent", "group": "agents", "status": "planned", "val": 11, "ceiling": "device", "model": "local", "detail": "the service call returned ok and the new state is reported", "never": ["locks", "garage", "alarm", "thermostat below 60 or above 85", "anything not on the exposed list"], "eval": "dim kitchen to 30 percent works, unlock front door refuses"}, {"id": "browser", "name": "Browser", "type": "agent", "group": "agents", "status": "planned", "val": 11, "ceiling": "read", "model": "smart", "detail": "the extracted text or a screenshot path, plus the URL", "never": ["log in", "use a password manager profile", "enter payment details", "accept a purchase"], "eval": "a login wall returns ASK_USER, not a credential attempt"}, {"id": "finance", "name": "Ledger", "type": "agent", "group": "agents", "status": "planned", "val": 11, "ceiling": "read", "model": "local", "detail": "a category table with the date range, the account nickname, and the source file for every number", "never": ["move money", "place a trade", "store an account or card number", "act on a balance without showing the source row"], "eval": "asked to pay a bill, refuses and names the ceiling; asked for spend by category, cites the CSV rows"}, {"id": "trainer", "name": "Trainer", "type": "agent", "group": "agents", "status": "planned", "val": 11, "ceiling": "vault", "model": "local", "detail": "an appended dated entry in vault/notes/log/, and the delta versus last week", "never": ["give medical advice", "invent numbers you were not given"], "eval": "logs a session, refuses to fabricate a missing metric"}, {"id": "plans", "name": "Plans", "type": "agent", "group": "agents", "status": "planned", "val": 11, "ceiling": "vault", "model": "smart", "detail": "an updated plan file with next action, blocker, and the date it was last touched", "never": ["book anything", "spend money", "promise a date the calendar has not confirmed", "delete a plan file"], "eval": "a stale plan (14 days untouched) is surfaced in the brief without being edited"}, {"id": "hudops", "name": "HUD ops", "type": "agent", "group": "agents", "status": "planned", "val": 11, "ceiling": "read", "model": "local", "detail": "a graph payload or a node contract pushed to the HUD socket", "never": ["approve a gate", "write anything", "act on a gesture it inferred rather than received"], "eval": "a malformed gesture event is dropped, not guessed at"}, {"id": "tool:now", "name": "now", "type": "tool", "group": "tools", "status": "live", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner jarvis \u00b7 gate no \u00b7 Timezone-aware clock. Called before any date word."}, {"id": "tool:list_dir", "name": "list_dir", "type": "tool", "group": "tools", "status": "live", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner jarvis \u00b7 gate no \u00b7 Vault listing. Resolved-path locked."}, {"id": "tool:read_file", "name": "read_file", "type": "tool", "group": "tools", "status": "live", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner jarvis \u00b7 gate no \u00b7 Vault read. 20k char cap."}, {"id": "tool:write_file", "name": "write_file", "type": "tool", "group": "tools", "status": "live", "val": 5, "gate": true, "cls": "write", "detail": "write \u00b7 owner scribe \u00b7 gate yes \u00b7 Vault write. Confirm gate. Overwrites."}, {"id": "tool:web_search", "name": "web_search", "type": "tool", "group": "tools", "status": "live", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner research \u00b7 gate no \u00b7 Public web. Returns title, URL, snippet."}, {"id": "tool:search_mail", "name": "search_mail", "type": "tool", "group": "tools", "status": "wired", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner comms \u00b7 gate no \u00b7 Google Workspace MCP, read scope only."}, {"id": "tool:read_mail", "name": "read_mail", "type": "tool", "group": "tools", "status": "wired", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner comms \u00b7 gate no \u00b7 Google Workspace MCP, read scope only."}, {"id": "tool:draft_email", "name": "draft_email", "type": "tool", "group": "tools", "status": "wired", "val": 5, "gate": true, "cls": "write", "detail": "write \u00b7 owner comms \u00b7 gate yes \u00b7 Gmail drafts endpoint. Never the send endpoint."}, {"id": "tool:send_email", "name": "send_email", "type": "tool", "group": "tools", "status": "denied", "val": 5, "gate": true, "cls": "external", "detail": "external \u00b7 owner comms \u00b7 gate yes \u00b7 Not attached. Daily cap of 3 when it is."}, {"id": "tool:list_events", "name": "list_events", "type": "tool", "group": "tools", "status": "wired", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner planner \u00b7 gate no \u00b7 Calendar read."}, {"id": "tool:get_freebusy", "name": "get_freebusy", "type": "tool", "group": "tools", "status": "wired", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner planner \u00b7 gate no \u00b7 Free/busy windows."}, {"id": "tool:create_calendar_event", "name": "create_calendar_event", "type": "tool", "group": "tools", "status": "denied", "val": 5, "gate": true, "cls": "external", "detail": "external \u00b7 owner planner \u00b7 gate yes \u00b7 Self only. No attendees in v1."}, {"id": "tool:ha_call_service", "name": "ha_call_service", "type": "tool", "group": "tools", "status": "planned", "val": 5, "gate": true, "cls": "device", "detail": "device \u00b7 owner home \u00b7 gate yes \u00b7 Allow-listed entities only."}, {"id": "tool:git_worktree", "name": "git_worktree", "type": "tool", "group": "tools", "status": "planned", "val": 5, "gate": true, "cls": "write", "detail": "write \u00b7 owner coder \u00b7 gate yes \u00b7 Detached worktree. Never main."}, {"id": "tool:run_tests", "name": "run_tests", "type": "tool", "group": "tools", "status": "planned", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner coder \u00b7 gate no \u00b7 Sandboxed pytest. No network."}, {"id": "tool:playwright", "name": "playwright", "type": "tool", "group": "tools", "status": "planned", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner browser \u00b7 gate no \u00b7 Dedicated profile. No saved passwords."}, {"id": "tool:read_diff", "name": "read_diff", "type": "tool", "group": "tools", "status": "planned", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner critic \u00b7 gate no \u00b7 Diff text only. No execution."}, {"id": "tool:episode_write", "name": "episode_write", "type": "tool", "group": "tools", "status": "planned", "val": 5, "gate": true, "cls": "write", "detail": "write \u00b7 owner memory \u00b7 gate yes \u00b7 Append only. Source and timestamp required."}, {"id": "tool:plaid_read", "name": "plaid_read", "type": "tool", "group": "tools", "status": "planned", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner finance \u00b7 gate no \u00b7 Plaid transactions/get, read scope. Tokens in the OS keychain, never the vault."}, {"id": "tool:ledger_query", "name": "ledger_query", "type": "tool", "group": "tools", "status": "planned", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner finance \u00b7 gate no \u00b7 SQL over vault/money/*.csv via duckdb. Read only, no writes to the ledger."}, {"id": "tool:pay_bill", "name": "pay_bill", "type": "tool", "group": "tools", "status": "denied", "val": 5, "gate": true, "cls": "external", "detail": "external \u00b7 owner finance \u00b7 gate yes \u00b7 Never attached in v1. Money leaves the house by hand."}, {"id": "tool:plan_query", "name": "plan_query", "type": "tool", "group": "tools", "status": "planned", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner plans \u00b7 gate no \u00b7 Structured read of vault/plans/*.md front matter."}, {"id": "tool:graph_query", "name": "graph_query", "type": "tool", "group": "tools", "status": "planned", "val": 5, "gate": false, "cls": "read", "detail": "read \u00b7 owner hudops \u00b7 gate no \u00b7 Serves graph.json and node contracts to the HUD socket."}, {"id": "tool:send_message", "name": "send_message", "type": "tool", "group": "tools", "status": "denied", "val": 5, "gate": true, "cls": "external", "detail": "external \u00b7 owner comms \u00b7 gate yes \u00b7 Slack or Telegram outbound. Same cap as send_email."}, {"id": "st_brief", "name": "Morning brief", "type": "strand", "group": "strands", "status": "live", "val": 8, "detail": "06:30 cron. Read everything, write one file, send nothing."}, {"id": "st_meet", "name": "Schedule and draft", "type": "strand", "group": "strands", "status": "live", "val": 8, "detail": "Planner proposes a slot, Comms drafts, you approve at the gate."}, {"id": "st_home", "name": "Voice home control", "type": "strand", "group": "strands", "status": "live", "val": 8, "detail": "Same brain as the CLI, thread_id kitchen. Simple commands never reach the LLM."}, {"id": "st_code", "name": "Sandboxed change", "type": "strand", "group": "strands", "status": "live", "val": 8, "detail": "Coder writes in a worktree, Critic reviews, you merge by hand."}, {"id": "st_recap", "name": "Weekly recap", "type": "strand", "group": "strands", "status": "live", "val": 8, "detail": "Sunday cron. Episodes to a one-page recap in the vault."}, {"id": "co_gmail", "name": "Google Workspace", "type": "connector", "group": "connectors", "status": "wired", "val": 9, "detail": "stdio \u00b7 OAuth device flow \u00b7 scopes: gmail.readonly, gmail.compose, calendar.readonly \u00b7 cap: no send scope requested in v1", "never": ["exceed scope: gmail.readonly", "exceed scope: gmail.compose", "exceed scope: calendar.readonly"]}, {"id": "co_cal", "name": "Google Calendar (write)", "type": "connector", "group": "connectors", "status": "denied", "val": 9, "detail": "stdio \u00b7 OAuth device flow \u00b7 scopes: calendar.events \u00b7 cap: self only, no attendees, 3 events per day", "never": ["exceed scope: calendar.events"]}, {"id": "co_ha", "name": "Home Assistant", "type": "connector", "group": "connectors", "status": "planned", "val": 9, "detail": "sse \u00b7 long-lived token \u00b7 scopes: exposed entities only \u00b7 cap: allow-list; locks, garage, alarm never exposed", "never": ["exceed scope: exposed entities only"]}, {"id": "co_plaid", "name": "Plaid (read)", "type": "connector", "group": "connectors", "status": "planned", "val": 9, "detail": "stdio \u00b7 link token, keychain \u00b7 scopes: transactions:read, accounts:read \u00b7 cap: read only, no auth/transfer product enabled", "never": ["exceed scope: transactions:read", "exceed scope: accounts:read"]}, {"id": "co_fs", "name": "Filesystem", "type": "connector", "group": "connectors", "status": "live", "val": 9, "detail": "stdio \u00b7 none \u00b7 scopes: vault/ only \u00b7 cap: root is vault/, never $HOME", "never": ["exceed scope: vault/ only"]}, {"id": "co_web", "name": "Playwright", "type": "connector", "group": "connectors", "status": "planned", "val": 9, "detail": "stdio \u00b7 none \u00b7 scopes: dedicated browser profile \u00b7 cap: no password manager, no payment autofill", "never": ["exceed scope: dedicated browser profile"]}, {"id": "co_slack", "name": "Slack", "type": "connector", "group": "connectors", "status": "denied", "val": 9, "detail": "stdio \u00b7 bot token \u00b7 scopes: channels:history, chat:write \u00b7 cap: read first for two weeks before chat:write is requested", "never": ["exceed scope: channels:history", "exceed scope: chat:write"]}, {"id": "cl_cli", "name": "CLI", "type": "client", "group": "clients", "status": "live", "val": 8, "detail": "thread_id home \u00b7 input keyboard \u00b7 gate: typed approve/reject/edit"}, {"id": "cl_hud", "name": "HUD", "type": "client", "group": "clients", "status": "wired", "val": 8, "detail": "thread_id home \u00b7 input gaze + hand + keyboard \u00b7 gate: pinch rejects, typed phrase approves external"}, {"id": "cl_voice", "name": "Kitchen speaker", "type": "client", "group": "clients", "status": "planned", "val": 8, "detail": "thread_id kitchen \u00b7 input wake word + speech \u00b7 gate: spoken reject only, never spoken approve"}, {"id": "cl_phone", "name": "Telegram", "type": "client", "group": "clients", "status": "planned", "val": 8, "detail": "thread_id telegram \u00b7 input text \u00b7 gate: inline buttons, external writes disabled"}, {"id": "cl_cron", "name": "Cron", "type": "client", "group": "clients", "status": "planned", "val": 8, "detail": "thread_id cron \u00b7 input schedule \u00b7 gate: no gate available, therefore read-only tools only"}, {"id": "file:identity.md", "name": "identity.md", "type": "file", "group": "vault", "status": "live", "val": 4, "detail": "vault/identity.md (829 bytes)"}, {"id": "file:money/README.md", "name": "README.md", "type": "file", "group": "vault", "status": "live", "val": 4, "detail": "vault/money/README.md (581 bytes)"}, {"id": "file:notes/todo.md", "name": "todo.md", "type": "file", "group": "vault", "status": "live", "val": 4, "detail": "vault/notes/todo.md (193 bytes)"}, {"id": "file:plans/EXAMPLE-kitchen-remodel.md", "name": "EXAMPLE-kitchen-remodel.md", "type": "file", "group": "vault", "status": "live", "val": 4, "detail": "vault/plans/EXAMPLE-kitchen-remodel.md (507 bytes)"}], "links": [{"source": "core", "target": "cl_os", "kind": "contains"}, {"source": "core", "target": "cl_comms", "kind": "contains"}, {"source": "core", "target": "cl_work", "kind": "contains"}, {"source": "core", "target": "cl_home", "kind": "contains"}, {"source": "core", "target": "cl_personal", "kind": "contains"}, {"source": "core", "target": "cl_finance", "kind": "contains"}, {"source": "core", "target": "cl_memory", "kind": "contains"}, {"source": "core", "target": "cl_plans", "kind": "contains"}, {"source": "cl_os", "target": "jarvis", "kind": "holds"}, {"source": "jarvis", "target": "research", "kind": "delegates"}, {"source": "jarvis", "target": "comms", "kind": "delegates"}, {"source": "jarvis", "target": "planner", "kind": "delegates"}, {"source": "jarvis", "target": "scribe", "kind": "delegates"}, {"source": "cl_os", "target": "research", "kind": "holds"}, {"source": "cl_os", "target": "scribe", "kind": "holds"}, {"source": "cl_comms", "target": "comms", "kind": "holds"}, {"source": "cl_work", "target": "planner", "kind": "holds"}, {"source": "cl_os", "target": "watcher", "kind": "holds"}, {"source": "cl_os", "target": "critic", "kind": "holds"}, {"source": "cl_memory", "target": "memory", "kind": "holds"}, {"source": "cl_work", "target": "coder", "kind": "holds"}, {"source": "cl_home", "target": "home", "kind": "holds"}, {"source": "cl_os", "target": "browser", "kind": "holds"}, {"source": "cl_finance", "target": "finance", "kind": "holds"}, {"source": "cl_personal", "target": "trainer", "kind": "holds"}, {"source": "cl_plans", "target": "plans", "kind": "holds"}, {"source": "cl_os", "target": "hudops", "kind": "holds"}, {"source": "jarvis", "target": "tool:now", "kind": "owns"}, {"source": "jarvis", "target": "tool:list_dir", "kind": "owns"}, {"source": "jarvis", "target": "tool:read_file", "kind": "owns"}, {"source": "scribe", "target": "tool:write_file", "kind": "owns"}, {"source": "research", "target": "tool:web_search", "kind": "owns"}, {"source": "comms", "target": "tool:search_mail", "kind": "owns"}, {"source": "comms", "target": "tool:read_mail", "kind": "owns"}, {"source": "comms", "target": "tool:draft_email", "kind": "owns"}, {"source": "comms", "target": "tool:send_email", "kind": "owns"}, {"source": "planner", "target": "tool:list_events", "kind": "owns"}, {"source": "planner", "target": "tool:get_freebusy", "kind": "owns"}, {"source": "planner", "target": "tool:create_calendar_event", "kind": "owns"}, {"source": "home", "target": "tool:ha_call_service", "kind": "owns"}, {"source": "coder", "target": "tool:git_worktree", "kind": "owns"}, {"source": "coder", "target": "tool:run_tests", "kind": "owns"}, {"source": "browser", "target": "tool:playwright", "kind": "owns"}, {"source": "critic", "target": "tool:read_diff", "kind": "owns"}, {"source": "memory", "target": "tool:episode_write", "kind": "owns"}, {"source": "finance", "target": "tool:plaid_read", "kind": "owns"}, {"source": "finance", "target": "tool:ledger_query", "kind": "owns"}, {"source": "finance", "target": "tool:pay_bill", "kind": "owns"}, {"source": "plans", "target": "tool:plan_query", "kind": "owns"}, {"source": "hudops", "target": "tool:graph_query", "kind": "owns"}, {"source": "comms", "target": "tool:send_message", "kind": "owns"}, {"source": "st_brief", "target": "watcher", "kind": "uses"}, {"source": "st_brief", "target": "planner", "kind": "uses"}, {"source": "st_brief", "target": "comms", "kind": "uses"}, {"source": "st_brief", "target": "scribe", "kind": "uses"}, {"source": "st_brief", "target": "jarvis", "kind": "uses"}, {"source": "st_meet", "target": "planner", "kind": "uses"}, {"source": "st_meet", "target": "comms", "kind": "uses"}, {"source": "st_meet", "target": "jarvis", "kind": "uses"}, {"source": "st_home", "target": "home", "kind": "uses"}, {"source": "st_home", "target": "jarvis", "kind": "uses"}, {"source": "st_code", "target": "coder", "kind": "uses"}, {"source": "st_code", "target": "critic", "kind": "uses"}, {"source": "st_code", "target": "jarvis", "kind": "uses"}, {"source": "st_recap", "target": "memory", "kind": "uses"}, {"source": "st_recap", "target": "scribe", "kind": "uses"}, {"source": "st_recap", "target": "jarvis", "kind": "uses"}, {"source": "comms", "target": "co_gmail", "kind": "connects"}, {"source": "co_gmail", "target": "tool:search_mail", "kind": "provides"}, {"source": "co_gmail", "target": "tool:read_mail", "kind": "provides"}, {"source": "co_gmail", "target": "tool:draft_email", "kind": "provides"}, {"source": "co_gmail", "target": "tool:list_events", "kind": "provides"}, {"source": "co_gmail", "target": "tool:get_freebusy", "kind": "provides"}, {"source": "planner", "target": "co_cal", "kind": "connects"}, {"source": "co_cal", "target": "tool:create_calendar_event", "kind": "provides"}, {"source": "home", "target": "co_ha", "kind": "connects"}, {"source": "co_ha", "target": "tool:ha_call_service", "kind": "provides"}, {"source": "finance", "target": "co_plaid", "kind": "connects"}, {"source": "co_plaid", "target": "tool:plaid_read", "kind": "provides"}, {"source": "scribe", "target": "co_fs", "kind": "connects"}, {"source": "co_fs", "target": "tool:read_file", "kind": "provides"}, {"source": "co_fs", "target": "tool:write_file", "kind": "provides"}, {"source": "co_fs", "target": "tool:list_dir", "kind": "provides"}, {"source": "browser", "target": "co_web", "kind": "connects"}, {"source": "co_web", "target": "tool:playwright", "kind": "provides"}, {"source": "comms", "target": "co_slack", "kind": "connects"}, {"source": "co_slack", "target": "tool:send_message", "kind": "provides"}, {"source": "cl_cli", "target": "jarvis", "kind": "speaks"}, {"source": "cl_hud", "target": "jarvis", "kind": "speaks"}, {"source": "cl_voice", "target": "jarvis", "kind": "speaks"}, {"source": "cl_phone", "target": "jarvis", "kind": "speaks"}, {"source": "cl_cron", "target": "jarvis", "kind": "speaks"}, {"source": "memory", "target": "file:identity.md", "kind": "stores"}, {"source": "memory", "target": "file:money/README.md", "kind": "stores"}, {"source": "memory", "target": "file:notes/todo.md", "kind": "stores"}, {"source": "memory", "target": "file:plans/EXAMPLE-kitchen-remodel.md", "kind": "stores"}]};
+/* SNAPSHOT-END */
+
+const $ = (id) => document.getElementById(id);
+const COLOR = { core:"#f3d27a", cluster:"#7ad4c8", supervisor:"#f3d27a", agent:"#e8e4d8",
+  tool:"#c084fc", strand:"#f0ab4e", file:"#94a3b8", connector:"#5ee0d0", client:"#f5d76e" };
+const STATUS = { live:"#3dcc6a", wired:"#d7b056", planned:"#5b6478", denied:"#e2725b" };
+
+let DATA = SNAPSHOT, filter = "all", target = null, selected = null;
+let dwellStart = 0, dwellNode = null;
+
+// ---------------------------------------------------------------- toast
+let toastT = 0;
+function toast(msg, ms = 1600) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("on");
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("on"), ms);
+}
+
+// ---------------------------------------------------------------- graph
+const Graph = ForceGraph()($("graph"))
+  .backgroundColor("rgba(0,0,0,0)")
+  .nodeRelSize(4)
+  .nodeVal((n) => n.val || 3)
+  .linkColor((l) => l.kind === "delegates" ? "rgba(215,176,86,.35)"
+    : l.kind === "provides" ? "rgba(94,224,208,.30)" : "rgba(200,210,230,.12)")
+  .linkWidth((l) => l.kind === "delegates" ? 1.1 : 0.5)
+  .linkDirectionalParticles((l) => l.kind === "delegates" ? 2 : 0)
+  .linkDirectionalParticleWidth(1.5)
+  .linkDirectionalParticleColor(() => "rgba(215,176,86,.85)")
+  .nodeCanvasObject(drawNode)
+  .nodePointerAreaPaint((n, c, ctx) => { ctx.fillStyle = c; ctx.beginPath();
+    ctx.arc(n.x, n.y, radius(n) + 6, 0, 6.283); ctx.fill(); })
+  .onNodeClick(select);
+
+function radius(n) {
+  return n.type === "core" ? 26 : n.type === "cluster" ? 15 : n.type === "supervisor" ? 11
+    : n.type === "agent" ? 8 : n.type === "connector" ? 7 : n.type === "client" ? 7
+    : n.type === "strand" ? 6 : 4;
+}
+
+function drawNode(n, ctx, scale) {
+  const r = radius(n), ring = STATUS[n.status] || "#5b6478";
+  if (n.type === "core") {
+    const g = ctx.createRadialGradient(n.x, n.y, 2, n.x, n.y, r * 2.6);
+    g.addColorStop(0, "rgba(94,224,208,.28)"); g.addColorStop(1, "rgba(94,224,208,0)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(n.x, n.y, r * 2.6, 0, 6.283); ctx.fill();
+  }
+  ctx.beginPath();
+  if (n.type === "strand") { ctx.save(); ctx.translate(n.x, n.y); ctx.rotate(Math.PI / 4);
+    ctx.rect(-r * .8, -r * .8, r * 1.6, r * 1.6); ctx.restore(); }
+  else if (n.type === "tool") ctx.rect(n.x - r, n.y - r, r * 2, r * 2);
+  else if (n.type === "file") ctx.rect(n.x - r, n.y - r * 1.3, r * 2, r * 2.6);
+  else if (n.type === "connector") {                       // hexagon = a door to outside
+    for (let i = 0; i < 6; i++) { const a = Math.PI / 3 * i - Math.PI / 6;
+      const px = n.x + r * Math.cos(a), py = n.y + r * Math.sin(a);
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); } ctx.closePath(); }
+  else ctx.arc(n.x, n.y, r, 0, 6.283);
+
+  ctx.fillStyle = (n.type === "cluster" || n.type === "core") ? "rgba(8,13,22,.92)"
+    : (n.color || COLOR[n.type] || "#64748b");
+  ctx.fill();
+  ctx.lineWidth = (n === target) ? 2.6 : (n.type === "core" || n.type === "cluster") ? 2 : 1.2;
+  ctx.strokeStyle = (n === target) ? "#f3d27a" : (n.type === "cluster" ? (n.color || COLOR.cluster) : ring);
+  ctx.stroke();
+
+  if (n.gate) { ctx.beginPath(); ctx.arc(n.x + r + 3, n.y - r - 1, 2, 0, 6.283);
+    ctx.fillStyle = "#d7b056"; ctx.fill(); }
+  if (typeof n.count === "number") { ctx.fillStyle = n.color || COLOR.cluster;
+    ctx.font = "600 11px ui-monospace, monospace"; ctx.textAlign = "center";
+    ctx.textBaseline = "middle"; ctx.fillText(String(n.count), n.x, n.y); }
+
+  const showLabel = (n.type !== "tool" && n.type !== "file") || scale > 1.4;
+  if (showLabel && n.name) {
+    const big = n.type === "core" ? 11 : n.type === "cluster" ? 9.5 : 8.5;
+    ctx.font = ((n.type === "core" || n.type === "cluster") ? "600 " : "") + big + "px ui-monospace, monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillStyle = n.type === "core" ? "#f3d27a" : n.type === "cluster" ? (n.color || COLOR.cluster)
+      : n.status === "planned" ? "#7b8496" : "#dfe3ec";
+    ctx.fillText((n.type === "cluster" || n.type === "core") ? n.name.toUpperCase() : n.name, n.x, n.y + r + 3);
+  }
+}
+
+const TABS = [["map","all"],["brain","agents"],["tools","tools"],["doors","connectors"],
+  ["surfaces","clients"],["strands","strands"],["gates","gated"]];
+TABS.forEach(([label, key], i) => {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.onclick = () => { filter = key; render(); toast("view · " + label); };
+  $("tabs").appendChild(b);
+});
+
+function visible() {
+  const keepTypes = {
+    agents: ["core","cluster","agent","supervisor"],
+    tools: ["core","cluster","agent","supervisor","tool"],
+    connectors: ["core","connector","agent","supervisor","tool"],
+    clients: ["core","client","agent","supervisor"],
+    strands: ["core","strand","agent","supervisor"],
+  }[filter];
+  const nodes = DATA.nodes.filter((n) => {
+    if (filter === "all") return true;
+    if (filter === "gated") return n.gate || n.type === "core" || n.type === "supervisor" || n.type === "connector";
+    return keepTypes ? keepTypes.includes(n.type) : true;
+  });
+  const keep = new Set(nodes.map((n) => n.id));
+  const links = DATA.links.filter((l) => {
+    const s = typeof l.source === "object" ? l.source.id : l.source;
+    const t = typeof l.target === "object" ? l.target.id : l.target;
+    return keep.has(s) && keep.has(t);
+  });
+  return { nodes, links };
+}
+function render() { Graph.graphData(visible()); }
+
+function select(n) {
+  if (!n) return;
+  selected = n;
+  $("panel").classList.add("open");
+  const bits = [n.type, n.status]; if (n.ceiling) bits.push("ceiling " + n.ceiling);
+  if (n.cls) bits.push(n.cls);
+  $("d-meta").textContent = bits.join(" · ");
+  $("d-name").textContent = n.name;
+  $("d-body").textContent = n.detail || "";
+  $("d-never").innerHTML = (n.never || []).map((x) => "<li>" + x + "</li>").join("");
+  $("d-eval").textContent = n.eval ? "eval: " + n.eval : "";
+}
+
+function boot(data) {
+  DATA = data; render();
+  $("t-nodes").textContent = data.nodes.length;
+  $("t-gated").textContent = (data.meta && data.meta.gated) ?? "-";
+  Graph.d3Force("charge").strength(-260);
+  Graph.d3Force("link").distance((l) => {
+    const t = typeof l.target === "object" ? l.target : {};
+    return t.type === "cluster" ? 130 : (t.type === "tool" || t.type === "file") ? 34 : 62;
+  });
+  setTimeout(() => Graph.zoomToFit(700, 70), 900);
+}
+fetch("graph.json").then((r) => r.ok ? r.json() : Promise.reject()).then(boot).catch(() => boot(SNAPSHOT));
+
+// ---------------------------------------------------------------- socket
+let ws = null;
+function connect() {
+  try { ws = new WebSocket("ws://127.0.0.1:8765/ws"); } catch (e) { return; }
+  ws.onopen = () => { $("t-link").textContent = "live"; $("t-link").className = "ok"; };
+  ws.onclose = () => { $("t-link").textContent = "offline"; $("t-link").className = "no";
+    setTimeout(connect, 4000); };
+  ws.onerror = () => {};
+  ws.onmessage = (e) => {
+    let m; try { m = JSON.parse(e.data); } catch { return; }
+    if (m.type === "graph") boot(m.data);
+    if (m.type === "say") toast(m.text, 2600);
+    if (m.type === "gate") openGate(m);
+  };
+}
+connect();
+const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+
+// ---------------------------------------------------------------- gate
+let gate = null;
+function openGate(m) {
+  gate = m;
+  $("gate").classList.add("open");
+  $("g-tool").textContent = m.tool;
+  $("g-args").textContent = JSON.stringify(m.args, null, 2);
+  const external = m.cls === "external" || m.cls === "device";
+  gate.phrase = external ? "approve " + m.code : "approve";
+  $("g-how").innerHTML = external
+    ? "This leaves the house. Type <b style='color:#f3d27a'>" + gate.phrase +
+      "</b> to approve. Palm out or Esc rejects. No gesture can approve this."
+    : "Type <b style='color:#f3d27a'>approve</b> to allow. Palm out or Esc rejects.";
+  $("g-input").value = ""; $("g-input").focus();
+  toast("gate open · " + m.tool, 2400);
+}
+function closeGate(decision, message) {
+  if (!gate) return;
+  send({ type: "decision", id: gate.id, decision, message: message || "" });
+  $("gate").classList.remove("open"); gate = null;
+  toast("gate " + decision);
+}
+$("g-input").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !gate) return;
+  if ($("g-input").value.trim().toLowerCase() === gate.phrase) closeGate("approve");
+  else toast("phrase did not match", 2000);
+});
+$("b-gate").onclick = () => openGate({ id: "demo", tool: "send_email", cls: "external",
+  code: String(Math.floor(1000 + Math.random() * 9000)),
+  args: { to: "alex@example.com", subject: "Thursday", body: "does 2pm work?" } });
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { if (gate) closeGate("reject", "halted by user"); else $("panel").classList.remove("open"); }
+});
+
+// ---------------------------------------------------------------- reticle
+const rc = $("reticle"), rx = rc.getContext("2d");
+let cursor = { x: innerWidth / 2, y: innerHeight / 2 };
+let gazePt = null, handPt = null, pinching = false, halting = 0, fisting = 0;
+
+function sizeCanvas() { rc.width = innerWidth; rc.height = innerHeight;
+  Graph.width(innerWidth).height(innerHeight); }
+addEventListener("resize", sizeCanvas); sizeCanvas();
+
+addEventListener("mousemove", (e) => { if (!handPt && !gazePt) cursor = { x: e.clientX, y: e.clientY }; });
+
+function nodeAt(px, py, tol = 26) {
+  const p = Graph.screen2GraphCoords(px, py);
+  let best = null, bd = Infinity;
+  for (const n of visible().nodes) {
+    if (n.x === undefined) continue;
+    const d = Math.hypot(n.x - p.x, n.y - p.y);
+    const rr = radius(n) + tol / Graph.zoom();
+    if (d < rr && d < bd) { bd = d; best = n; }
+  }
+  return best;
+}
+
+function paintReticle() {
+  rx.clearRect(0, 0, rc.width, rc.height);
+  const { x, y } = cursor;
+  const dwell = dwellNode ? Math.min(1, (performance.now() - dwellStart) / 350) : 0;
+
+  rx.save();
+  rx.strokeStyle = pinching ? "#f3d27a" : "rgba(94,224,208,.75)";
+  rx.lineWidth = 1.2;
+  rx.beginPath(); rx.arc(x, y, 13, 0, 6.283); rx.stroke();
+  rx.beginPath(); rx.arc(x, y, 2.2, 0, 6.283); rx.fillStyle = rx.strokeStyle; rx.fill();
+  for (let i = 0; i < 4; i++) {
+    const a = Math.PI / 2 * i + Math.PI / 4;
+    rx.beginPath();
+    rx.moveTo(x + Math.cos(a) * 17, y + Math.sin(a) * 17);
+    rx.lineTo(x + Math.cos(a) * 23, y + Math.sin(a) * 23);
+    rx.stroke();
+  }
+  if (dwell > 0) {
+    rx.strokeStyle = "#f3d27a"; rx.lineWidth = 2.4;
+    rx.beginPath(); rx.arc(x, y, 19, -Math.PI / 2, -Math.PI / 2 + 6.283 * dwell); rx.stroke();
+  }
+  if (halting) { rx.strokeStyle = "#e2725b"; rx.lineWidth = 2;
+    rx.beginPath(); rx.arc(x, y, 30, 0, 6.283); rx.stroke(); }
+  rx.restore();
+  requestAnimationFrame(paintReticle);
+}
+paintReticle();
+
+// dwell -> target, pinch -> select
+setInterval(() => {
+  const n = nodeAt(cursor.x, cursor.y);
+  if (n !== dwellNode) { dwellNode = n; dwellStart = performance.now(); }
+  if (n && performance.now() - dwellStart > 350) target = n;
+  if (!n) target = null;
+}, 60);
+
+// ---------------------------------------------------------------- tracking
+let hand = null, face = null, running = false, lastT = 0, fps = 0;
+const video = $("cam");
+const EMA = (prev, next, a) => prev === null ? next : { x: prev.x + (next.x - prev.x) * a, y: prev.y + (next.y - prev.y) * a };
+
+$("b-vid").onclick = () => video.classList.toggle("hide");
+
+$("b-cam").onclick = async () => {
+  if (running) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    video.srcObject = stream; await video.play();
+    $("t-cam").textContent = "on"; $("t-cam").className = "ok";
+  } catch (e) { toast("camera denied · mouse still works", 2600); return; }
+
+  const files = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  hand = await HandLandmarker.createFromOptions(files, {
+    baseOptions: { modelAssetPath:
+      "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
+      delegate: "GPU" },
+    numHands: 2, runningMode: "VIDEO",
+  });
+  face = await FaceLandmarker.createFromOptions(files, {
+    baseOptions: { modelAssetPath:
+      "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task",
+      delegate: "GPU" },
+    numFaces: 1, runningMode: "VIDEO",
+  });
+  running = true; toast("tracking online");
+  loop();
+};
+
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+let smoothHand = null, smoothGaze = null, twoHandBase = null;
+let pinchDown = false, palmSince = 0, fistSince = 0;
+
+function handSignals(lms) {
+  const wrist = lms[0], mmcp = lms[9];
+  const span = Math.max(1e-4, dist(wrist, mmcp));
+  const pinch = dist(lms[4], lms[8]) / span;                 // thumb tip to index tip
+  const tips = [8, 12, 16, 20], pips = [6, 10, 14, 18];
+  let ext = 0, curl = 0;
+  for (let i = 0; i < 4; i++) {
+    if (lms[tips[i]].y < lms[pips[i]].y - 0.02) ext++;
+    if (lms[tips[i]].y > lms[pips[i]].y + 0.01) curl++;
+  }
+  return { pinch, ext, curl, tip: lms[8], wrist };
+}
+
+function gazeFeature(lms) {
+  // iris centers 468 (left) and 473 (right); eye corners and lids around them
+  const L = { i: lms[468], out: lms[33], in: lms[133], top: lms[159], bot: lms[145] };
+  const R = { i: lms[473], out: lms[263], in: lms[362], top: lms[386], bot: lms[374] };
+  const ax = (e) => (e.i.x - e.in.x) / ((e.out.x - e.in.x) || 1e-4);
+  const ay = (e) => (e.i.y - e.top.y) / ((e.bot.y - e.top.y) || 1e-4);
+  return [(ax(L) + ax(R)) / 2, (ay(L) + ay(R)) / 2];
+}
+
+// 3x3 solve for the calibration affine (least squares, normal equations)
+function solve3(A, b) {
+  const M = A.map((r, i) => [...r, b[i]]);
+  for (let c = 0; c < 3; c++) {
+    let p = c; for (let r = c + 1; r < 3; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    [M[c], M[p]] = [M[p], M[c]];
+    if (Math.abs(M[c][c]) < 1e-9) return null;
+    for (let r = 0; r < 3; r++) if (r !== c) {
+      const f = M[r][c] / M[c][c];
+      for (let k = c; k < 4; k++) M[r][k] -= f * M[c][k];
+    }
+  }
+  return [M[0][3] / M[0][0], M[1][3] / M[1][1], M[2][3] / M[2][2]];
+}
+let CAL = null;                    // {gx:[a,b,c], gy:[a,b,c]}
+function fitCalibration(samples) {  // samples: {f:[u,v], sx, sy}
+  const A = [[0,0,0],[0,0,0],[0,0,0]], bx = [0,0,0], by = [0,0,0];
+  for (const s of samples) {
+    const v = [s.f[0], s.f[1], 1];
+    for (let i = 0; i < 3; i++) { for (let j = 0; j < 3; j++) A[i][j] += v[i] * v[j];
+      bx[i] += v[i] * s.sx; by[i] += v[i] * s.sy; }
+  }
+  const gx = solve3(A.map((r) => [...r]), bx), gy = solve3(A.map((r) => [...r]), by);
+  return (gx && gy) ? { gx, gy } : null;
+}
+const applyCal = (f) => CAL && ({
+  x: CAL.gx[0] * f[0] + CAL.gx[1] * f[1] + CAL.gx[2],
+  y: CAL.gy[0] * f[0] + CAL.gy[1] * f[1] + CAL.gy[2],
+});
+
+function loop() {
+  if (!running) return;
+  const now = performance.now();
+  if (now - lastT > 4) { fps = Math.round(1000 / (now - lastT)); lastT = now; }
+  $("t-fps").textContent = fps;
+
+  if (video.readyState >= 2) {
+    const h = hand.detectForVideo(video, now);
+    $("t-hands").textContent = h.landmarks.length;
+    $("t-hands").className = h.landmarks.length ? "ok" : "no";
+
+    if (h.landmarks.length) {
+      const s = handSignals(h.landmarks[0]);
+      const px = (1 - s.tip.x) * innerWidth, py = s.tip.y * innerHeight;
+      smoothHand = EMA(smoothHand, { x: px, y: py }, 0.35);
+      handPt = smoothHand;
+
+      const wasPinch = pinchDown;
+      if (!pinchDown && s.pinch < 0.32) pinchDown = true;
+      if (pinchDown && s.pinch > 0.45) pinchDown = false;
+      pinching = pinchDown;
+      $("t-pinch").textContent = pinchDown ? "closed" : "open";
+      $("t-pinch").className = pinchDown ? "ok" : "no";
+      if (pinchDown && !wasPinch) { const n = nodeAt(cursor.x, cursor.y); if (n) select(n); }
+
+      // palm out = halt / reject
+      if (s.ext === 4 && s.pinch > 0.6) { if (!palmSince) palmSince = now; }
+      else palmSince = 0;
+      halting = !!(palmSince && now - palmSince > 400);
+      if (halting) {
+        if (gate) closeGate("reject", "palm out");
+        else { send({ type: "halt" }); toast("halt sent"); }
+        palmSince = 0;                       // must re-raise the palm to halt again
+      }
+
+      // fist held = kill switch
+      if (s.curl === 4 && s.pinch < 0.5) { if (!fistSince) fistSince = now; }
+      else fistSince = 0;
+      if (fistSince && now - fistSince > 1000) {
+        send({ type: "kill" }); toast("kill switch · tools revoked", 3000);
+        fistSince = 0;
+      }
+
+      // two hands = zoom
+      if (h.landmarks.length > 1) {
+        const d = dist(h.landmarks[0][0], h.landmarks[1][0]);
+        if (twoHandBase === null) twoHandBase = d;
+        const k = d / twoHandBase;
+        if (Math.abs(k - 1) > 0.08) { Graph.zoom(Graph.zoom() * (1 + (k - 1) * 0.25), 120); twoHandBase = d; }
+      } else twoHandBase = null;
+    } else { handPt = null; pinching = false; palmSince = 0; fistSince = 0; }
+
+    const f = face.detectForVideo(video, now);
+    if (f.faceLandmarks && f.faceLandmarks.length) {
+      const feat = gazeFeature(f.faceLandmarks[0]);
+      lastFeature = feat;
+      if (CAL) {
+        const p = applyCal(feat);
+        smoothGaze = EMA(smoothGaze, p, 0.22);
+        gazePt = smoothGaze;
+        $("t-gaze").textContent = "tracking"; $("t-gaze").className = "ok";
+      }
+      if (calCollecting) calSamples.push({ f: feat, sx: calTarget.x, sy: calTarget.y });
+    }
+  }
+
+  // gaze targets, hand overrides when present
+  const p = handPt || gazePt;
+  if (p) cursor = { x: Math.max(0, Math.min(innerWidth, p.x)), y: Math.max(0, Math.min(innerHeight, p.y)) };
+  requestAnimationFrame(loop);
+}
+
+// ---------------------------------------------------------------- calibration
+let lastFeature = null, calSamples = [], calCollecting = false, calTarget = { x: 0, y: 0 };
+$("b-cal").onclick = async () => {
+  if (!running) { toast("start tracking first"); return; }
+  const pts = [[.1,.12],[.5,.12],[.9,.12],[.1,.5],[.5,.5],[.9,.5],[.1,.88],[.5,.88],[.9,.88]];
+  $("calib").classList.add("on");
+  calSamples = [];
+  const dot = document.createElement("div");
+  dot.style.cssText = "position:absolute;width:14px;height:14px;border-radius:50%;background:#f3d27a;box-shadow:0 0 22px #f3d27a";
+  $("calib").appendChild(dot);
+  for (let i = 0; i < pts.length; i++) {
+    calTarget = { x: pts[i][0] * innerWidth, y: pts[i][1] * innerHeight };
+    dot.style.left = (calTarget.x - 7) + "px"; dot.style.top = (calTarget.y - 7) + "px";
+    $("cal-b").textContent = "POINT " + (i + 1) + " / 9";
+    await new Promise((r) => setTimeout(r, 700));      // settle
+    calCollecting = true;
+    await new Promise((r) => setTimeout(r, 900));      // collect
+    calCollecting = false;
+  }
+  dot.remove(); $("calib").classList.remove("on");
+  const fit = fitCalibration(calSamples);
+  if (fit) { CAL = fit; toast("gaze calibrated · " + calSamples.length + " samples", 2600); }
+  else { toast("calibration failed · try more light", 3000); }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# secrets and state, never committed
+.env
+vault/jarvis.db
+vault/drafts/
+vault/memory/episodes/
+vault/money/*.csv
+vault/notes/brief.md
+mcp.local.json
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.pytest-script-check.mjs
+
+# os
+.DS_Store
+Thumbs.db

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "google":     { "command": "uvx", "args": ["workspace-mcp"] },
+    "filesystem": { "command": "npx", "args": ["@modelcontextprotocol/server-filesystem", "vault/"] },
+    "home":       { "url": "http://homeassistant.local:8123/mcp_server/sse" },
+    "browser":    { "command": "npx", "args": ["@playwright/mcp"] }
+  }
+}
