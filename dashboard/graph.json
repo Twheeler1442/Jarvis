@@ -840,6 +840,15 @@
       "detail": "thread_id cron \u00b7 input schedule \u00b7 gate: no gate available, therefore read-only tools only"
     },
     {
+      "id": "file:README.md",
+      "name": "README.md",
+      "type": "file",
+      "group": "vault",
+      "status": "live",
+      "val": 4,
+      "detail": "vault/README.md (1894 bytes)"
+    },
+    {
       "id": "file:identity.md",
       "name": "identity.md",
       "type": "file",
@@ -1341,6 +1350,11 @@
       "source": "cl_cron",
       "target": "jarvis",
       "kind": "speaks"
+    },
+    {
+      "source": "memory",
+      "target": "file:README.md",
+      "kind": "stores"
     },
     {
       "source": "memory",

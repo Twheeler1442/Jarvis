@@ -232,3 +232,26 @@ def test_every_gated_tool_on_the_map_actually_stops_at_runtime(registry):
         if tool["gate"]:
             assert interrupt_on.get(tool["id"]), \
                 f"{tool['id']} is gated on the map but does not stop at runtime"
+
+
+def test_the_committed_map_matches_a_fresh_rebuild():
+    """CI rebuilds the map and fails if the committed copy differs. Catch that
+    here instead, before the push.
+
+    This is easy to trip without noticing: every `.md` file under `vault/`
+    becomes a node, so adding a README to the vault silently changes the map.
+    It is also easy to think you checked when you did not, because
+    `build_graph --check` only lints. It does not regenerate, so a `git diff`
+    straight after it compares a file nothing has rewritten and is always clean.
+    """
+    import json
+    from pathlib import Path
+
+    from jarvis.graph.build_graph import build, load
+
+    repo = Path(__file__).resolve().parents[1]
+    fresh = build(load())
+    committed = json.loads((repo / "dashboard" / "graph.json").read_text(encoding="utf-8"))
+    assert fresh == committed, (
+        "the committed map is stale. run: python -m jarvis.graph.build_graph, "
+        "then commit dashboard/ and hud/")
