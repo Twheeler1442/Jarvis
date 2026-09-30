@@ -26,7 +26,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 
-from jarvis.config import CONSEQUENTIAL_TOOLS, ROOT, WRITE_TOOLS
+from jarvis.config import ROOT
+from jarvis.policy import tool_class
 
 GRAPH = ROOT / "dashboard" / "graph.json"
 HUD = ROOT / "hud"
@@ -41,15 +42,29 @@ SURFACE_POLICY: dict[str, dict[str, Any]] = {
     "telegram": {"approve": {"vault", "write"}},
     "cron":     {"approve": set()},
 }
-DEFAULT_SURFACE = "cron"          # unknown surface gets the weakest policy
+DEFAULT_SURFACE = "cron"
+"""What a socket is until it proves otherwise: the weakest policy, approves
+nothing. A socket that never says hello used to default to `hud`, which may
+approve everything, so simply omitting the handshake was a privilege
+escalation. Unauthenticated clients get the weakest seat, never the strongest."""
+
+CODE_REQUIRED = frozenset({"device", "external"})
+"""Classes whose approval must echo the one time code. Anything that reaches
+past the software into the house or the outside world. The HUD has always
+demanded the code for both; the bridge used to require it only for `external`,
+so a device call could be approved by a bare 'approve'."""
 
 app = FastAPI(title="jarvis-bridge")
 
 _agent: Any = None
-_sockets: set[WebSocket] = set()
+_sockets: dict[WebSocket, dict[str, Any]] = {}   # ws -> {"surface": str, "greeted": bool}
 _pending: dict[str, dict[str, Any]] = {}
 _turns: set[asyncio.Task] = set()
 _lock = asyncio.Lock()
+
+
+def may_approve(surface: str, cls: str) -> bool:
+    return cls in SURFACE_POLICY.get(surface, SURFACE_POLICY[DEFAULT_SURFACE])["approve"]
 
 
 # ------------------------------------------------------------------ agent
@@ -70,14 +85,6 @@ def set_agent(agent: Any) -> None:
 
 
 # ------------------------------------------------------------------ helpers
-def tool_class(name: str) -> str:
-    if name in CONSEQUENTIAL_TOOLS:
-        return "external"
-    if name in WRITE_TOOLS:
-        return "write"
-    return "write"          # unknown tool that reached a gate is treated as a write
-
-
 async def broadcast(payload: dict) -> None:
     dead = []
     for ws in list(_sockets):
@@ -86,7 +93,29 @@ async def broadcast(payload: dict) -> None:
         except Exception:
             dead.append(ws)
     for ws in dead:
-        _sockets.discard(ws)
+        _sockets.pop(ws, None)
+
+
+async def broadcast_gate(payload: dict, code: str, cls: str) -> None:
+    """Show the gate to everyone; hand the one time code only to a seat that
+    could actually use it.
+
+    Every surface should see what is being asked, so any of them can say no.
+    But the code is the proof that a human is reading this screen right now,
+    and broadcasting it to a cron or voice socket hands that proof to a seat
+    that is not allowed to give it.
+    """
+    dead = []
+    for ws, state in list(_sockets.items()):
+        body = dict(payload)
+        if code is not None and may_approve(state["surface"], cls):
+            body["code"] = code
+        try:
+            await ws.send_text(json.dumps(body))
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _sockets.pop(ws, None)
 
 
 def interrupts_of(state: Any) -> list[dict]:
@@ -120,6 +149,37 @@ def last_text(state: Any) -> str:
     return getattr(msg, "content", None) or str(msg)
 
 
+async def gate_one(request: dict, surface: str) -> dict:
+    """Open one gate and wait. Returns the resume decision for this request."""
+    name, args = request["name"], request["args"]
+    cls = tool_class(name)
+    gid = secrets.token_hex(4)
+    code = f"{secrets.randbelow(9000) + 1000}"
+
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+    async with _lock:
+        _pending[gid] = {"future": fut, "cls": cls, "code": code, "tool": name}
+
+    await broadcast_gate({"type": "gate", "id": gid, "tool": name, "args": args,
+                          "cls": cls, "asked_by": surface}, code, cls)
+
+    try:
+        decision = await asyncio.wait_for(fut, timeout=GATE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        decision = {"decision": "reject", "message": "gate timed out, nobody answered"}
+    except asyncio.CancelledError:
+        async with _lock:
+            _pending.pop(gid, None)
+        raise
+    finally:
+        async with _lock:
+            _pending.pop(gid, None)
+
+    if decision.get("decision") == "approve":
+        return {"type": "approve"}
+    return {"type": "reject", "message": decision.get("message") or "rejected at the gate"}
+
+
 async def run_turn(text: str, thread: str, surface: str) -> str:
     """One user turn. Pauses at every gate until some surface answers it."""
     config = {"configurable": {"thread_id": thread}}
@@ -127,42 +187,28 @@ async def run_turn(text: str, thread: str, surface: str) -> str:
         get_agent().invoke, {"messages": [{"role": "user", "content": text}]}, config
     )
 
-    while interrupts_of(state):
-        request = interrupts_of(state)[0]
-        name, args = request["name"], request["args"]
-        cls = tool_class(name)
-        gid = secrets.token_hex(4)
-        code = f"{secrets.randbelow(9000) + 1000}"
+    while True:
+        requests = interrupts_of(state)
+        if not requests:
+            break
 
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        async with _lock:
-            _pending[gid] = {"future": fut, "cls": cls, "code": code, "tool": name}
+        # One gate per request. A parallel batch used to gate only requests[0]
+        # and resume with a single decision: the second call was never shown to
+        # a human, and the count mismatch failed the whole turn.
+        decisions: list[dict] = []
+        halted = False
+        for request in requests:
+            if halted:
+                decisions.append({"type": "reject", "message": "halted, rest of batch refused"})
+                continue
+            decision = await gate_one(request, surface)
+            decisions.append(decision)
+            if decision["type"] == "reject" and decision["message"].startswith(("halt", "kill")):
+                halted = True
 
-        await broadcast({"type": "gate", "id": gid, "tool": name, "args": args,
-                         "cls": cls, "code": code, "asked_by": surface})
-
-        try:
-            decision = await asyncio.wait_for(fut, timeout=GATE_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            decision = {"decision": "reject", "message": "gate timed out, nobody answered"}
-        except asyncio.CancelledError:
-            async with _lock:
-                _pending.pop(gid, None)
-            raise
-        finally:
-            async with _lock:
-                _pending.pop(gid, None)
-
-        kind = decision.get("decision")
-        if kind == "approve":
-            resume = {"decisions": [{"type": "approve"}]}
-        elif kind == "edit":
-            resume = {"decisions": [{"type": "edit", "edited_action": decision["edited_action"]}]}
-        else:
-            resume = {"decisions": [{"type": "reject",
-                                     "message": decision.get("message") or "rejected at the gate"}]}
-
-        state = await asyncio.to_thread(get_agent().invoke, Command(resume=resume), config)
+        state = await asyncio.to_thread(
+            get_agent().invoke, Command(resume={"decisions": decisions}), config
+        )
 
     return last_text(state)
 
@@ -179,8 +225,7 @@ async def resolve_gate(msg: dict, surface: str, ws: WebSocket | None = None) -> 
         item["future"].set_result({"decision": "reject", "message": msg.get("message", "")})
         return "reject"
 
-    allowed = SURFACE_POLICY.get(surface, SURFACE_POLICY[DEFAULT_SURFACE])["approve"]
-    if item["cls"] not in allowed:
+    if not may_approve(surface, item["cls"]):
         if ws:
             await ws.send_text(json.dumps({"type": "error", "id": gid,
                 "text": f"{surface} may not approve "
@@ -188,9 +233,9 @@ async def resolve_gate(msg: dict, surface: str, ws: WebSocket | None = None) -> 
                         f"Approve it from the CLI."}))
         return "refused-by-policy"
 
-    # External writes echo a one time code, so a stored gesture, a stuck key, or a
-    # replayed message cannot approve anything.
-    if item["cls"] == "external" and msg.get("code") != item["code"]:
+    # Writes that reach outside the software echo a one time code, so a stored
+    # gesture, a stuck key, or a replayed message cannot approve anything.
+    if item["cls"] in CODE_REQUIRED and msg.get("code") != item["code"]:
         if ws:
             await ws.send_text(json.dumps({"type": "error", "id": gid, "text": "wrong confirm code"}))
         return "wrong-code"
@@ -234,8 +279,8 @@ async def ask(body: dict) -> dict:
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
-    _sockets.add(ws)
-    surface = "hud"
+    state = {"surface": DEFAULT_SURFACE, "greeted": False}
+    _sockets[ws] = state
     try:
         if GRAPH.exists():
             await ws.send_text(json.dumps({"type": "graph",
@@ -243,10 +288,23 @@ async def ws_endpoint(ws: WebSocket) -> None:
         while True:
             msg = json.loads(await ws.receive_text())
             kind = msg.get("type")
+            surface = state["surface"]
 
             if kind == "hello":
-                surface = msg.get("surface", "hud")
-                await ws.send_text(json.dumps({"type": "say", "text": f"surface: {surface}"}))
+                # A seat is claimed once, on the first message, and never
+                # changed. Re-sending hello used to let a socket introduce
+                # itself as `voice`, get refused at a gate, then say hello
+                # again as `cli` and approve that same open gate.
+                if state["greeted"]:
+                    await ws.send_text(json.dumps({"type": "error",
+                        "text": f"surface is already {surface} and cannot be changed; "
+                                f"open a new connection"}))
+                    continue
+                claimed = msg.get("surface", DEFAULT_SURFACE)
+                state["surface"] = claimed if claimed in SURFACE_POLICY else DEFAULT_SURFACE
+                state["greeted"] = True
+                await ws.send_text(json.dumps({"type": "say",
+                                               "text": f"surface: {state['surface']}"}))
 
             elif kind == "ask":
                 # Run the turn as a task. If we awaited it here the receive loop
@@ -271,7 +329,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        _sockets.discard(ws)
+        _sockets.pop(ws, None)
 
 
 async def _answer(ws: WebSocket, msg: dict, surface: str) -> None:

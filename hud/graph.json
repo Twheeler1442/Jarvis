@@ -5,7 +5,7 @@
     "tools": 24,
     "gated": 9,
     "clusters": 8,
-    "connectors": 7,
+    "connectors": 8,
     "clients": 5,
     "strands": 5,
     "statuses": {
@@ -702,10 +702,21 @@
       "group": "connectors",
       "status": "wired",
       "val": 9,
-      "detail": "stdio \u00b7 OAuth device flow \u00b7 scopes: gmail.readonly, gmail.compose, calendar.readonly \u00b7 cap: no send scope requested in v1",
+      "detail": "stdio \u00b7 OAuth device flow \u00b7 scopes: gmail.readonly, gmail.compose \u00b7 cap: no send scope requested in v1",
       "never": [
         "exceed scope: gmail.readonly",
-        "exceed scope: gmail.compose",
+        "exceed scope: gmail.compose"
+      ]
+    },
+    {
+      "id": "co_gcal_read",
+      "name": "Google Calendar (read)",
+      "type": "connector",
+      "group": "connectors",
+      "status": "wired",
+      "val": 9,
+      "detail": "stdio \u00b7 OAuth device flow \u00b7 scopes: calendar.readonly \u00b7 cap: read only; the write door co_cal stays denied",
+      "never": [
         "exceed scope: calendar.readonly"
       ]
     },
@@ -1222,12 +1233,17 @@
       "kind": "provides"
     },
     {
-      "source": "co_gmail",
+      "source": "planner",
+      "target": "co_gcal_read",
+      "kind": "connects"
+    },
+    {
+      "source": "co_gcal_read",
       "target": "tool:list_events",
       "kind": "provides"
     },
     {
-      "source": "co_gmail",
+      "source": "co_gcal_read",
       "target": "tool:get_freebusy",
       "kind": "provides"
     },

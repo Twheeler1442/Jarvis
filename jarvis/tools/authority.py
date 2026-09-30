@@ -2,20 +2,18 @@ from __future__ import annotations
 
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 
-from jarvis.config import CONSEQUENTIAL_TOOLS, WRITE_TOOLS
+from jarvis.policy import gated_tools
 
 
 def write_gate() -> HumanInTheLoopMiddleware:
     """Pause before any tool that changes the world.
 
-    Read tools are omitted so they auto-approve.
-    Write tools allow approve / edit / reject.
-    Consequential tools do not allow silent auto-run.
+    The list comes from the registry, via jarvis.policy, not from a second
+    hand-kept set. While those were two lists they drifted: four tools were
+    marked `gate: true` on the map and never actually stopped at runtime.
+    Read tools are omitted, so they auto-approve.
     """
-    interrupt_on: dict[str, bool] = {}
-    for name in WRITE_TOOLS | CONSEQUENTIAL_TOOLS:
-        interrupt_on[name] = True
     return HumanInTheLoopMiddleware(
-        interrupt_on=interrupt_on,
+        interrupt_on=gated_tools(),
         description_prefix="Jarvis wants to change something",
     )

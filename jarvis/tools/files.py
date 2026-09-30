@@ -8,9 +8,16 @@ from jarvis.config import VAULT, ensure_vault
 
 
 def _safe(relpath: str) -> Path:
+    """Resolve a vault-relative path, or refuse.
+
+    Compare by path components, never by string prefix. A prefix check on a
+    vault at /home/me/vault happily accepts /home/me/vault-evil, because that
+    string does start with the vault path. resolve() runs first so symlinks
+    and .. segments are already collapsed before the comparison.
+    """
     ensure_vault()
     target = (VAULT / relpath).resolve()
-    if not str(target).startswith(str(VAULT)):
+    if not target.is_relative_to(VAULT):
         raise ValueError(f"refusing path outside vault: {relpath}")
     return target
 

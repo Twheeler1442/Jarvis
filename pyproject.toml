@@ -39,6 +39,7 @@ voice = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-timeout>=2.3",   # a blocked websocket read must fail, not hang CI
     "fastapi>=0.110",
     "websockets>=12.0",      # tests/live_check.py drives a real socket
 ]
@@ -59,3 +60,7 @@ jarvis = ["prompts/*.md", "graph/*.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Bridge tests wait on a websocket message. When a regression means that
+# message never arrives, the read blocks forever: the suite hangs instead of
+# going red, which is the one failure mode CI cannot report. Cap it.
+timeout = 30

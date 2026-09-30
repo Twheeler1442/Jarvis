@@ -22,7 +22,22 @@ HUD = ROOT / "hud" / "graph.json"
 VAULT = ROOT / "vault"
 
 STATUS_COLOR = {"live": "#3dcc6a", "wired": "#d7b056", "planned": "#5b6478", "denied": "#e2725b"}
+
+# What an agent is allowed to reach, weakest first.
 CEILING_RANK = {"read": 0, "vault": 1, "propose": 2, "device": 3, "external": 4}
+
+# What holding a tool of each class demands of its owner's ceiling. Separate
+# from CEILING_RANK because the two vocabularies only look alike: `propose` is
+# a ceiling and never a tool class, `write` is a class and never a ceiling.
+CLASS_NEED = {"read": 0, "vault": 1, "write": 1, "device": 3, "external": 4}
+
+CHANGES_THE_WORLD = {"write", "device", "external"}
+
+# Classes where a second holder means a second copy of the key. Read and
+# write tools are legitimately shared (five agents write into the vault, and
+# the path lock in the tool is what confines them). A device or external tool
+# is the send key, and the send key has exactly one holder.
+SOLE_OWNER_CLASSES = {"device", "external"}
 
 
 def load() -> dict:
@@ -33,8 +48,27 @@ def load() -> dict:
 # lint: the map is not decoration, it is the permission model
 # --------------------------------------------------------------------------
 
+def _duplicate_ids(reg: dict) -> list[str]:
+    """Two rows with one id is not a typo, it is a silent override.
+
+    Every collection here is keyed by id elsewhere in this file, last row
+    winning. A second `write_file` row declaring itself unGated and owned by
+    Research therefore replaced the real one and linted clean, because by the
+    time any check ran there was only ever one of them.
+    """
+    errors = []
+    for section in ("clusters", "agents", "tools", "connectors", "clients", "gestures", "strands"):
+        seen: set[str] = set()
+        for row in reg.get(section, []):
+            rid = row.get("id")
+            if rid in seen:
+                errors.append(f"{section}: duplicate id {rid}. one row silently overrides the other")
+            seen.add(rid)
+    return errors
+
+
 def lint(reg: dict) -> list[str]:
-    errors: list[str] = []
+    errors: list[str] = _duplicate_ids(reg)
     agents = {a["id"]: a for a in reg["agents"]}
     tools = {t["id"]: t for t in reg["tools"]}
     clusters = {c["id"] for c in reg["clusters"]}
@@ -55,27 +89,48 @@ def lint(reg: dict) -> list[str]:
             if tid not in tools:
                 errors.append(f"{aid}: owns unknown tool {tid}")
 
-    # every tool has exactly one owner, and the owner claims it
+    # the owner claims its tool, the class is a real class, and the gate is a
+    # real boolean. `"gate": "no"` is truthy, and a truthy string read as a
+    # boolean is how a tool stops stopping.
     for tid, tool in tools.items():
         owner = tool["owner"]
+        cls = tool.get("class")
+        if cls not in CLASS_NEED:
+            errors.append(f"{tid}: unknown class {cls!r}. expected one of {sorted(CLASS_NEED)}")
+        if not isinstance(tool.get("gate"), bool):
+            errors.append(f"{tid}: gate must be true or false, got {tool.get('gate')!r}")
         if owner not in agents:
             errors.append(f"{tid}: owner {owner} is not an agent")
             continue
         if tool["status"] != "denied" and tid not in agents[owner].get("owns", []):
             errors.append(f"{tid}: owned by {owner} on the map but not in its tool list")
-        if tool["class"] in {"write", "device", "external"} and not tool["gate"]:
-            errors.append(f"{tid}: {tool['class']} tool with no confirm gate")
+        if cls in CHANGES_THE_WORLD and not tool.get("gate"):
+            errors.append(f"{tid}: {cls} tool with no confirm gate")
 
-    # a read-ceiling agent may not hold a tool that changes anything
+    # the send key has exactly one holder
+    for tid, tool in tools.items():
+        if tool.get("class") not in SOLE_OWNER_CLASSES:
+            continue
+        holders = [a["id"] for a in reg["agents"] if tid in a.get("owns", [])]
+        if len(holders) > 1:
+            errors.append(
+                f"{tid}: {tool['class']} tool held by {len(holders)} agents "
+                f"({', '.join(sorted(holders))}). the send key has one holder")
+
+    # no agent may hold a tool that reaches past its ceiling
     for agent in reg["agents"]:
+        if agent["ceiling"] not in CEILING_RANK:
+            errors.append(f"{agent['id']}: unknown ceiling {agent['ceiling']!r}")
         ceiling = CEILING_RANK.get(agent["ceiling"], 0)
         for tid in agent.get("owns", []):
             tool = tools.get(tid)
             if not tool:
                 continue
-            need = {"read": 0, "write": 1, "device": 3, "external": 4}[tool["class"]]
+            # An unknown class is treated as the most dangerous, so a typo
+            # cannot buy a tool more reach than it declared.
+            need = CLASS_NEED.get(tool.get("class"), max(CLASS_NEED.values()))
             if need > ceiling:
-                errors.append(f"{agent['id']}: ceiling {agent['ceiling']} cannot hold {tid} ({tool['class']})")
+                errors.append(f"{agent['id']}: ceiling {agent['ceiling']} cannot hold {tid} ({tool.get('class')})")
 
     # supervisor sanity
     supervisors = [a for a in reg["agents"] if a["type"] == "supervisor"]
@@ -84,34 +139,70 @@ def lint(reg: dict) -> list[str]:
     elif not supervisors[0].get("checkpointer"):
         errors.append("supervisor has no checkpointer. there is no conversation memory")
 
-    # connectors: the doorway is a node too
+    # connectors: the doorway is a node too, and a door is not a way around
+    # the ceiling of the agent that opens it
     for co in reg.get("connectors", []):
-        if co["owner"] not in agents:
+        owner = agents.get(co["owner"])
+        if owner is None:
             errors.append(f"{co['id']}: owner {co['owner']} is not an agent")
         for tid in co.get("provides", []):
             if tid not in tools:
                 errors.append(f"{co['id']}: provides unknown tool {tid}")
-            elif co["status"] == "denied" and tools[tid]["status"] in {"live", "wired"}:
+                continue
+            if co["status"] == "denied" and tools[tid]["status"] in {"live", "wired"}:
                 errors.append(f"{co['id']}: connector denied but {tid} is {tools[tid]['status']}")
+            if owner is None or co["status"] == "denied":
+                # A denied door delivers nothing, so it may name a tool that
+                # no agent is allowed to hold yet: that is what denied means.
+                # These checks bite the moment you try to open it, which is
+                # exactly when the ownership question has to be answered.
+                continue
+            if tid not in owner.get("owns", []):
+                errors.append(
+                    f"{co['id']}: hands {tid} to {owner['id']}, which does not own it. "
+                    f"a door may only deliver tools its owner already declares")
+            need = CLASS_NEED.get(tools[tid].get("class"), max(CLASS_NEED.values()))
+            if need > CEILING_RANK.get(owner["ceiling"], 0):
+                errors.append(
+                    f"{co['id']}: delivers {tid} ({tools[tid].get('class')}) to {owner['id']}, "
+                    f"whose ceiling is {owner['ceiling']}")
         if not co.get("cap"):
             errors.append(f"{co['id']}: no cap. a connector without a written cap is an open door")
 
-    # clients: every surface declares how a gate is answered on it
+    # clients: a surface declares what it may approve as a list the bridge can
+    # actually compare, not as a sentence of prose. `may_approve: []` is the
+    # unattended surface. Prose stays in `gate` for humans to read.
     for cli in reg.get("clients", []):
         if not cli.get("thread"):
             errors.append(f"{cli['id']}: no thread_id")
         if not cli.get("gate"):
-            errors.append(f"{cli['id']}: no gate policy")
-        if cli["id"] == "cl_cron" and "read-only" not in cli["gate"]:
-            errors.append("cl_cron: unattended surface must be read-only, no gate can be answered")
+            errors.append(f"{cli['id']}: no gate policy in prose")
+        approves = cli.get("may_approve")
+        if not isinstance(approves, list):
+            errors.append(f"{cli['id']}: may_approve must be a list of tool classes, "
+                          f"got {approves!r}")
+            continue
+        for cls in approves:
+            if cls not in CLASS_NEED:
+                errors.append(f"{cli['id']}: may_approve names unknown class {cls!r}")
+        if cli.get("attended") is False and approves:
+            errors.append(f"{cli['id']}: unattended surface may approve {approves}. "
+                          f"nobody is there to answer a gate")
 
-    # gestures: an input modality may stop things, never authorize them
+    # gestures: an input modality may stop things, never authorize them.
+    # Declared as booleans, because `binds` is free text and "confirm the
+    # pending write" does not contain the substring "approve".
     gestures = reg.get("gestures", [])
-    if gestures and not any("HALT" in g["binds"] or "kill" in g["binds"] for g in gestures):
-        errors.append("gestures: no HALT gesture. every hands-on surface needs one")
+    if not gestures:
+        errors.append("gestures: none declared. a hands-on surface needs a HALT gesture")
+    if gestures and not any(g.get("halts") for g in gestures):
+        errors.append("gestures: no gesture with halts: true. every hands-on surface needs one")
     for g in gestures:
-        if "approve" in g["binds"].lower():
-            errors.append(f"{g['id']}: a gesture may never bind to approve. gestures reject, humans approve")
+        if g.get("authorizes"):
+            errors.append(f"{g['id']}: authorizes must be false. "
+                          f"gestures reject, humans approve")
+        if not isinstance(g.get("authorizes"), bool):
+            errors.append(f"{g['id']}: must declare authorizes: false explicitly")
 
     for strand in reg["strands"]:
         for member in strand["members"]:

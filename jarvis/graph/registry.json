@@ -687,19 +687,33 @@
       "auth": "OAuth device flow",
       "scopes": [
         "gmail.readonly",
-        "gmail.compose",
-        "calendar.readonly"
+        "gmail.compose"
       ],
       "provides": [
         "search_mail",
         "read_mail",
-        "draft_email",
-        "list_events",
-        "get_freebusy"
+        "draft_email"
       ],
       "owner": "comms",
       "status": "wired",
       "cap": "no send scope requested in v1"
+    },
+    {
+      "id": "co_gcal_read",
+      "name": "Google Calendar (read)",
+      "server": "uvx workspace-mcp",
+      "transport": "stdio",
+      "auth": "OAuth device flow",
+      "scopes": [
+        "calendar.readonly"
+      ],
+      "provides": [
+        "list_events",
+        "get_freebusy"
+      ],
+      "owner": "planner",
+      "status": "wired",
+      "cap": "read only; the write door co_cal stays denied"
     },
     {
       "id": "co_cal",
@@ -809,7 +823,15 @@
       "thread": "home",
       "input": "keyboard",
       "gate": "typed approve/reject/edit",
-      "status": "live"
+      "status": "live",
+      "may_approve": [
+        "vault",
+        "write",
+        "device",
+        "external"
+      ],
+      "attended": true,
+      "surface": "cli"
     },
     {
       "id": "cl_hud",
@@ -817,7 +839,15 @@
       "thread": "home",
       "input": "gaze + hand + keyboard",
       "gate": "pinch rejects, typed phrase approves external",
-      "status": "wired"
+      "status": "wired",
+      "may_approve": [
+        "vault",
+        "write",
+        "device",
+        "external"
+      ],
+      "attended": true,
+      "surface": "hud"
     },
     {
       "id": "cl_voice",
@@ -825,7 +855,10 @@
       "thread": "kitchen",
       "input": "wake word + speech",
       "gate": "spoken reject only, never spoken approve",
-      "status": "planned"
+      "status": "planned",
+      "may_approve": [],
+      "attended": true,
+      "surface": "voice"
     },
     {
       "id": "cl_phone",
@@ -833,7 +866,13 @@
       "thread": "telegram",
       "input": "text",
       "gate": "inline buttons, external writes disabled",
-      "status": "planned"
+      "status": "planned",
+      "may_approve": [
+        "vault",
+        "write"
+      ],
+      "attended": true,
+      "surface": "telegram"
     },
     {
       "id": "cl_cron",
@@ -841,7 +880,10 @@
       "thread": "cron",
       "input": "schedule",
       "gate": "no gate available, therefore read-only tools only",
-      "status": "planned"
+      "status": "planned",
+      "may_approve": [],
+      "attended": false,
+      "surface": "cron"
     }
   ],
   "gestures": [
@@ -850,42 +892,54 @@
       "name": "gaze dwell",
       "signal": "iris vector, 350 ms dwell",
       "binds": "highlight node",
-      "risk": "low"
+      "risk": "low",
+      "authorizes": false,
+      "halts": false
     },
     {
       "id": "g_pinch",
       "name": "pinch",
       "signal": "thumb tip to index tip < 0.35 hand units",
       "binds": "select / open contract",
-      "risk": "low"
+      "risk": "low",
+      "authorizes": false,
+      "halts": false
     },
     {
       "id": "g_drag",
       "name": "pinch drag",
       "signal": "pinch held, wrist delta",
       "binds": "pan the map",
-      "risk": "low"
+      "risk": "low",
+      "authorizes": false,
+      "halts": false
     },
     {
       "id": "g_spread",
       "name": "two hand spread",
       "signal": "wrist distance delta",
       "binds": "zoom, expand cluster",
-      "risk": "low"
+      "risk": "low",
+      "authorizes": false,
+      "halts": false
     },
     {
       "id": "g_palm",
       "name": "palm out",
       "signal": "5 fingers extended, palm normal toward camera",
       "binds": "HALT: cancel run, reject at gate",
-      "risk": "none, it only ever stops things"
+      "risk": "none, it only ever stops things",
+      "authorizes": false,
+      "halts": true
     },
     {
       "id": "g_fist",
       "name": "fist hold 1s",
       "signal": "all tips below MCP for 1000 ms",
       "binds": "kill switch: drop socket, revoke tools",
-      "risk": "none"
+      "risk": "none",
+      "authorizes": false,
+      "halts": true
     }
   ]
 }

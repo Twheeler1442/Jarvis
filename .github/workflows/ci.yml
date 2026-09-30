@@ -27,8 +27,10 @@ jobs:
 
       - name: Lint the roster
         # Refuses a map that contradicts itself: one supervisor with a
-        # checkpointer, no specialist with one, one owner per tool, a gate on
-        # every write, no tool above its owner's ceiling, a cap on every door.
+        # checkpointer, no specialist with one, no duplicate ids, one holder
+        # for every send key, a real boolean gate on every write, no tool or
+        # door above its owner's ceiling, a cap on every door, and no gesture
+        # that authorizes.
         run: python -m jarvis.graph.build_graph --check
 
       - name: Rebuild the map and fail if it is not committed

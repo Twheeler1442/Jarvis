@@ -79,12 +79,20 @@ python -m jarvis.graph.build_graph --check
 |---|---|
 | Exactly one supervisor, and it has a checkpointer | Two brains, or a brain with no memory |
 | No specialist has a checkpointer | Confirm gates that cannot reach you |
-| Every tool has exactly one owner that claims it | The send key quietly held by two agents |
-| Every write, device, and external tool is gated | Silent writes |
+| No duplicate ids, anywhere | A second row silently overriding the first |
+| The declared owner claims its tool | A tool nobody actually holds |
+| Every device and external tool has exactly one holder | The send key quietly held by two agents |
+| Every write, device, and external tool is gated, with a real boolean | Silent writes, and `"gate": "no"` reading as true |
 | Tool class never exceeds the owner's ceiling | A read-only agent holding a send tool |
+| A door only delivers tools its owner already declares, within its ceiling | A connector as an unaudited path around the ceiling |
 | Every agent has a ban list, a definition of done, and an eval | Personas with no contract |
 | Every connector has a written cap | An open door |
-| No gesture binds to approve | A camera that can authorize an action |
+| Every gesture declares `authorizes: false`, and one declares `halts: true` | A camera that can authorize an action |
+| Every surface declares `may_approve` as a list; an unattended one is empty | A gate policy that reads well in prose and enforces nothing |
+
+Read and write tools are deliberately shareable: five agents write into the vault, and the path lock inside the tool is what confines them. The single-holder rule is about the send key, so it binds `device` and `external` only.
+
+Two invariants keep the map and the code from drifting apart, and both are tested: the registry's `may_approve` must equal the bridge's `SURFACE_POLICY`, and every tool marked `gate: true` must actually interrupt at runtime.
 
 ## Capability ceilings
 
@@ -103,18 +111,24 @@ The bridge, not the browser, decides what each surface may answer. A compromised
 | Surface | May approve | May reject |
 |---|---|---|
 | CLI | everything, typed | yes |
-| HUD | everything, typed phrase plus a one-time code for external writes | yes, palm out |
+| HUD | everything, typed phrase plus a one-time code for device and external writes | yes, palm out |
 | Kitchen speaker | nothing | yes |
 | Telegram | vault and write only | yes |
 | Cron | nothing (nobody is there) | n/a |
 
+A socket is whatever `hello` says it is, **once**. It starts in the weakest seat, so a client that never introduces itself approves nothing, and the seat cannot be changed afterwards: saying `voice`, getting refused, then saying `cli` and answering the same open gate does not work. The one-time code is shown only to sockets whose seat could actually use it, so a cron or voice listener is never handed the proof it is not allowed to give.
+
+This is a policy boundary between surfaces, not authentication. The bridge binds `127.0.0.1` on purpose. Anyone who can open a socket to it can claim the `cli` seat, so if you tunnel the HUD to another device, register that surface as `voice` — it can reject but never approve.
+
 ## Tests
 
 ```bash
-pytest -q          # 63 tests: no model, no network, no credentials
+pytest -q          # 96 tests: no model, no network, no credentials
 ```
 
-They cover the vault path lock, the confirm gate end to end (reject must actually prevent the write), the registry invariants, the bridge (surface policy, one-time codes, replay, halt), the connector loader dropping undeclared tools, and both browser surfaces (snapshot freshness, pinned versions, no gesture path to approve).
+They cover the vault path lock (including a sibling directory that shares the vault's name, which a string-prefix check waves straight through), the confirm gate end to end (reject must actually prevent the write), the registry invariants, the bridge (surface policy, seat escalation, one-time codes, replay, halt), the connector loader dropping undeclared tools and refusing a second door that impersonates the first, and both browser surfaces (snapshot freshness, pinned versions, no gesture path to approve).
+
+Every security fix in this repo has a test that was verified to fail when the fix is reverted. A test that cannot fail is not a test.
 
 Two checks need more than a test file, so they run on demand and in CI:
 

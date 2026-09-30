@@ -115,8 +115,10 @@ def test_voice_surface_can_always_reject(bridge):
 
 def test_external_write_requires_the_one_time_code(bridge):
     client, agent, server = bridge
-    server.set_agent(StubAgent(tool="send_email", args={"to": "alex@example.com"}))
+    agent = StubAgent(tool="send_email", args={"to": "alex@example.com"})
+    server.set_agent(agent)
     with client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "hello", "surface": "cli"}))
         ws.send_text(json.dumps({"type": "ask", "text": "send it"}))
         gate = _drain_to(ws, "gate")
         assert gate["cls"] == "external"
@@ -180,10 +182,150 @@ def test_interrupt_shapes_all_normalize():
         assert parsed and parsed[0]["name"] == "write_file", shape
 
 
-def test_tool_class_mapping():
+def test_tool_class_comes_from_the_registry():
+    """Not from a hand-kept frozenset. The two used to disagree on 18 of 24
+    tools, and the disagreement is what let telegram approve `pay_bill`."""
     from jarvis.server import tool_class
 
     assert tool_class("write_file") == "write"
     assert tool_class("draft_email") == "write"
     assert tool_class("send_email") == "external"
-    assert tool_class("ha_call_service") == "external"
+    assert tool_class("ha_call_service") == "device"
+    # Declared external on the map but absent from the old frozensets.
+    assert tool_class("pay_bill") == "external"
+    assert tool_class("send_message") == "external"
+
+
+def test_unknown_tool_is_treated_as_the_strictest_class():
+    """A tool nobody declared must not be waved through as a mere write."""
+    from jarvis.server import tool_class
+
+    assert tool_class("ha_unlock_the_front_door") == "external"
+    assert tool_class("") == "external"
+
+
+# ---------------------------------------------------------------------------
+# Regressions. Every test below is a bypass that a green suite once allowed.
+# ---------------------------------------------------------------------------
+
+def test_a_socket_that_never_says_hello_gets_the_weakest_seat(bridge):
+    """Omitting the handshake used to mean `hud`, which may approve anything.
+
+    An unauthenticated client must land in the weakest seat, never the
+    strongest, so forgetting to introduce yourself cannot be an escalation.
+    """
+    client, agent, server = bridge
+    agent = StubAgent(tool="send_email", args={"to": "alex@example.com"})
+    server.set_agent(agent)
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "ask", "text": "send it"}))
+        gate = _drain_to(ws, "gate")
+        ws.send_text(json.dumps({"type": "decision", "id": gate["id"],
+                                 "decision": "approve", "code": gate.get("code", "")}))
+        err = _drain_to(ws, "error")
+        assert "may not approve" in err["text"]
+    assert agent.decisions == [], "a socket with no hello approved an external write"
+
+
+def test_surface_cannot_be_changed_after_the_handshake(bridge):
+    """hello once. Re-introducing yourself used to be a live escalation:
+    say voice, get refused, say cli, approve that same open gate."""
+    client, agent, server = bridge
+    agent = StubAgent(tool="send_email", args={"to": "alex@example.com"})
+    server.set_agent(agent)
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "hello", "surface": "voice"}))
+        ws.send_text(json.dumps({"type": "ask", "text": "send it"}))
+        gate = _drain_to(ws, "gate")
+
+        ws.send_text(json.dumps({"type": "decision", "id": gate["id"],
+                                 "decision": "approve", "code": "1234"}))
+        assert "may not approve" in _drain_to(ws, "error")["text"]
+
+        ws.send_text(json.dumps({"type": "hello", "surface": "cli"}))
+        assert "cannot be changed" in _drain_to(ws, "error")["text"]
+
+        ws.send_text(json.dumps({"type": "decision", "id": gate["id"],
+                                 "decision": "approve", "code": "1234"}))
+        assert "may not approve" in _drain_to(ws, "error")["text"]
+    assert agent.decisions == [], "a socket escalated its own surface"
+
+
+def test_unknown_surface_falls_back_to_the_weakest_seat(bridge):
+    client, agent, _ = bridge
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "hello", "surface": "definitely-not-a-surface"}))
+        assert "cron" in _drain_to(ws, "say")["text"]
+        ws.send_text(json.dumps({"type": "ask", "text": "write it"}))
+        gate = _drain_to(ws, "gate")
+        ws.send_text(json.dumps({"type": "decision", "id": gate["id"], "decision": "approve"}))
+        assert "may not approve" in _drain_to(ws, "error")["text"]
+    assert agent.decisions == []
+
+
+def test_the_code_is_not_handed_to_a_seat_that_cannot_use_it(bridge):
+    """The code proves a human is reading this screen. Broadcasting it to a
+    cron or voice socket hands that proof to a seat that may not give it."""
+    client, agent, server = bridge
+    agent = StubAgent(tool="send_email", args={"to": "alex@example.com"})
+    server.set_agent(agent)
+    with client.websocket_connect("/ws") as privileged:
+        privileged.send_text(json.dumps({"type": "hello", "surface": "cli"}))
+        _drain_to(privileged, "say")
+        with client.websocket_connect("/ws") as bystander:
+            bystander.send_text(json.dumps({"type": "hello", "surface": "voice"}))
+            _drain_to(bystander, "say")
+
+            privileged.send_text(json.dumps({"type": "ask", "text": "send it"}))
+            mine = _drain_to(privileged, "gate")
+            theirs = _drain_to(bystander, "gate")
+
+            # Both see what is being asked, so either can say no.
+            assert mine["tool"] == theirs["tool"] == "send_email"
+            assert mine["args"] == theirs["args"]
+            # Only the seat that could use the code is given it.
+            assert mine.get("code"), "the approving seat never got the code"
+            assert "code" not in theirs, "the code leaked to a seat that cannot approve"
+
+            privileged.send_text(json.dumps({"type": "decision", "id": mine["id"],
+                                             "decision": "approve", "code": mine["code"]}))
+            _drain_to(privileged, "say")
+    assert agent.decisions[0]["decisions"][0]["type"] == "approve"
+
+
+def test_device_writes_also_demand_the_code(bridge):
+    """The HUD has always demanded a code for device calls. The bridge asked
+    only for external, so a bare 'approve' could flip a switch in the house."""
+    client, agent, server = bridge
+    agent = StubAgent(tool="ha_call_service", args={"entity": "light.kitchen"})
+    server.set_agent(agent)
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "hello", "surface": "cli"}))
+        ws.send_text(json.dumps({"type": "ask", "text": "dim the kitchen"}))
+        gate = _drain_to(ws, "gate")
+        assert gate["cls"] == "device"
+
+        ws.send_text(json.dumps({"type": "decision", "id": gate["id"], "decision": "approve"}))
+        assert "wrong confirm code" in _drain_to(ws, "error")["text"]
+        assert agent.decisions == [], "a bare approve moved a device"
+
+        ws.send_text(json.dumps({"type": "decision", "id": gate["id"],
+                                 "decision": "approve", "code": gate["code"]}))
+        _drain_to(ws, "say")
+    assert agent.decisions[0]["decisions"][0]["type"] == "approve"
+
+
+def test_telegram_cannot_approve_an_external_tool_the_frozenset_forgot(bridge):
+    """`pay_bill` is external on the map. It was classified `write` at the
+    gate, so telegram could approve it with no code at all."""
+    client, agent, server = bridge
+    agent = StubAgent(tool="pay_bill", args={"amount": 400})
+    server.set_agent(agent)
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "hello", "surface": "telegram"}))
+        ws.send_text(json.dumps({"type": "ask", "text": "pay it"}))
+        gate = _drain_to(ws, "gate")
+        assert gate["cls"] == "external"
+        ws.send_text(json.dumps({"type": "decision", "id": gate["id"], "decision": "approve"}))
+        assert "may not approve" in _drain_to(ws, "error")["text"]
+    assert agent.decisions == [], "telegram approved a payment"

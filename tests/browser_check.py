@@ -22,6 +22,13 @@ BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8099"
 SHOTS = Path(sys.argv[2] if len(sys.argv) > 2 else "/tmp/shots")
 SHOTS.mkdir(parents=True, exist_ok=True)
 
+# A blank canvas samples exactly 0; a drawn graph samples 155-170 at
+# 1440x900 (measured over five loads of each surface). The old threshold of
+# 200 sat ABOVE that range, so this check passed on luck and went red the
+# first time the layout shifted. Assert well clear of zero instead of
+# fencing in the operating range.
+INK_FLOOR = 40
+
 results: list[tuple[str, bool, str]] = []
 
 
@@ -69,7 +76,7 @@ with sync_playwright() as pw:
         for (let i = 0; i < d.length; i += 4 * 97) if (d[i + 3] > 12) lit++;
         return lit;
     }""")
-    check("dashboard: graph actually drew pixels", ink > 200, f"lit samples={ink}")
+    check("dashboard: graph actually drew pixels", ink > INK_FLOOR, f"lit samples={ink}")
 
     page.click("#tabs >> text=gates")
     page.wait_for_timeout(900)
@@ -105,7 +112,7 @@ with sync_playwright() as pw:
         for (let i = 0; i < d.length; i += 4 * 97) if (d[i + 3] > 12) lit++;
         return lit;
     }""")
-    check("hud: graph actually drew pixels", ink > 200, f"lit samples={ink}")
+    check("hud: graph actually drew pixels", ink > INK_FLOOR, f"lit samples={ink}")
 
     # the reticle is its own canvas and animates on rAF
     ret = page.evaluate("""() => {

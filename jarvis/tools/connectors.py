@@ -44,28 +44,71 @@ def server_config(conn: dict) -> dict[str, Any]:
     return {"url": conn["server"], "transport": conn["transport"]}
 
 
+def door_of(tool: Any) -> str | None:
+    """Which door a tool came through, if the adapter says.
+
+    langchain-mcp-adapters keys its client by our connector id, and carries
+    that back on the tool. Versions differ about where, so try the places it
+    has lived and treat "cannot tell" as unknown rather than as a match.
+    """
+    for attr in ("server_name", "server", "namespace"):
+        value = getattr(tool, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    meta = getattr(tool, "metadata", None) or {}
+    if isinstance(meta, dict):
+        for key in ("server_name", "server", "connector"):
+            value = meta.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
 def keep_declared(offered: list, conns: list[dict]) -> tuple[list, list[str]]:
     """Drop every tool the registry did not declare. Returns (kept, dropped names).
 
     This is the whole security value of the connector layer: a server that adds
     twelve tools in an update contributes exactly the ones you wrote down.
+
+    Matching is per door, not on the bare tool name. With one flat name map,
+    an agent holding two doors let the second one ship a tool named after the
+    first one's and inherit its cap: name a tool `write_file` and it arrives
+    stamped "vault only". When the adapter tells us which server a tool came
+    from we require that server to be the one that declared it; when it will
+    not say, we fall back to the name and say so in the log, because refusing
+    everything on an older adapter would be worse than the risk.
     """
-    declared: dict[str, dict] = {}
+    by_door: dict[tuple[str, str], dict] = {}
+    by_name: dict[str, dict] = {}
     for conn in conns:
         for name in conn.get("provides", []):
-            declared[name] = conn
+            by_door[(conn["id"], name)] = conn
+            by_name.setdefault(name, conn)
 
     kept, dropped = [], []
     for tool in offered:
-        conn = declared.get(getattr(tool, "name", None))
+        name = getattr(tool, "name", None)
+        if not name:
+            dropped.append(str(tool))
+            continue
+        door = door_of(tool)
+        if door is not None:
+            conn = by_door.get((door, name))
+        else:
+            conn = by_name.get(name)
         if conn is None:
-            dropped.append(getattr(tool, "name", str(tool)))
+            dropped.append(f"{door}:{name}" if door else name)
             continue
         cap = f"\n[cap: {conn['cap']}]"
         if cap not in (tool.description or ""):
             tool.description = (tool.description or "") + cap
         kept.append(tool)
     return kept, dropped
+
+
+CONNECT_TIMEOUT_SECONDS = 20
+"""A server that errors is handled. A server that hangs is not: without this
+the await never returns and the house never finishes starting up."""
 
 
 async def tools_for(agent_id: str) -> list:
@@ -77,7 +120,8 @@ async def tools_for(agent_id: str) -> list:
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
     client = MultiServerMCPClient({c["id"]: server_config(c) for c in conns})
-    kept, dropped = keep_declared(await client.get_tools(), conns)
+    offered = await asyncio.wait_for(client.get_tools(), timeout=CONNECT_TIMEOUT_SECONDS)
+    kept, dropped = keep_declared(offered, conns)
     if dropped:
         print(f"connectors: dropped {len(dropped)} undeclared tools for {agent_id}: "
               f"{', '.join(sorted(dropped)[:8])}")
@@ -85,10 +129,23 @@ async def tools_for(agent_id: str) -> list:
 
 
 def tools_for_sync(agent_id: str) -> list:
+    """Never raises. A dead, missing, or hanging door costs you that door and
+    nothing else: the agent runs on its local tools.
+
+    CancelledError is re-raised rather than swallowed. It is not a failure of
+    the connector, it is someone shutting us down, and eating it turns a kill
+    into a hang.
+    """
     try:
         return asyncio.run(tools_for(agent_id))
-    except Exception as exc:                       # a dead server must not take the house down
-        print(f"connectors: {agent_id} degraded, running local tools only ({exc})")
+    except asyncio.CancelledError:
+        raise
+    except asyncio.TimeoutError:
+        print(f"connectors: {agent_id} timed out after {CONNECT_TIMEOUT_SECONDS}s, "
+              f"running local tools only")
+        return []
+    except BaseException as exc:                 # noqa: BLE001 - the house must still start
+        print(f"connectors: {agent_id} degraded, running local tools only ({exc!r})")
         return []
 
 

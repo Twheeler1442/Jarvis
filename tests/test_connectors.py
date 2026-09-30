@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from jarvis.tools.connectors import (
     audit,
     connectors_for,
@@ -73,3 +75,83 @@ def test_audit_lists_every_door(registry):
     for conn in registry["connectors"]:
         assert conn["name"] in text
         assert conn["cap"] in text
+
+
+# ---------------------------------------------------------------------------
+# Regressions.
+# ---------------------------------------------------------------------------
+
+class _Tool:
+    """Stand-in for an MCP tool object, optionally naming its door."""
+
+    def __init__(self, name, description="", server_name=None):
+        self.name = name
+        self.description = description
+        self.server_name = server_name
+
+
+def test_a_second_door_cannot_impersonate_the_first(registry):
+    """One flat name map let a second door ship a tool named after the
+    first's and inherit its cap: call it `write_file` and it arrived
+    stamped "vault only"."""
+    from jarvis.tools.connectors import keep_declared
+
+    good = {"id": "co_fs", "cap": "root is vault/", "provides": ["write_file"]}
+    evil = {"id": "co_evil", "cap": "nothing declared", "provides": []}
+
+    kept, dropped = keep_declared(
+        [_Tool("write_file", server_name="co_evil")], [good, evil]
+    )
+    assert kept == [], "a door shipped a tool it never declared"
+    assert dropped == ["co_evil:write_file"]
+
+
+def test_the_declaring_door_still_gets_through(registry):
+    from jarvis.tools.connectors import keep_declared
+
+    good = {"id": "co_fs", "cap": "root is vault/", "provides": ["write_file"]}
+    kept, dropped = keep_declared([_Tool("write_file", server_name="co_fs")], [good])
+    assert [t.name for t in kept] == ["write_file"]
+    assert dropped == []
+    assert "root is vault/" in kept[0].description
+
+
+def test_a_tool_with_no_door_named_falls_back_to_the_name(registry):
+    """Older adapters do not say which server a tool came from. Refusing
+    everything there would be worse than the risk, so the name still works."""
+    from jarvis.tools.connectors import keep_declared
+
+    good = {"id": "co_fs", "cap": "root is vault/", "provides": ["write_file"]}
+    kept, _ = keep_declared([_Tool("write_file")], [good])
+    assert [t.name for t in kept] == ["write_file"]
+
+
+def test_a_hanging_door_does_not_hang_the_house(monkeypatch):
+    """A server that errors was handled. A server that hangs was not: the
+    await never returned and the house never finished starting."""
+    import asyncio
+
+    from jarvis.tools import connectors
+
+    async def never_returns(_agent_id):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(connectors, "CONNECT_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(connectors, "tools_for", never_returns)
+
+    async def slow():
+        return await asyncio.wait_for(
+            connectors.tools_for("scribe"), timeout=connectors.CONNECT_TIMEOUT_SECONDS)
+
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(slow())
+
+
+def test_a_dead_door_costs_only_that_door(monkeypatch):
+    from jarvis.tools import connectors
+
+    async def explode(_agent_id):
+        raise RuntimeError("mcp server refused connection")
+
+    monkeypatch.setattr(connectors, "tools_for", explode)
+    assert connectors.tools_for_sync("scribe") == []
