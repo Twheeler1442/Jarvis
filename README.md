@@ -4,6 +4,20 @@ A personal multi-agent assistant that runs on your machine. One supervisor, spec
 
 The rule the whole thing is built on: **an input may target and halt, it may never approve.** Gestures reject. Humans sign.
 
+### Where things are
+
+| Folder | What it holds |
+|---|---|
+| [`jarvis/`](jarvis/) | The package. The registry, the linter, the bridge, the agents, the tools. |
+| [`hud/`](hud/) | The cockpit: gaze targets, hands select, the gate strip demands a typed phrase. |
+| [`dashboard/`](dashboard/) | The same map, mouse only, no camera. For looking rather than operating. |
+| [`tests/`](tests/) | 96 offline tests, plus a live socket check and a real browser check. |
+| [`vault/`](vault/) | The only folder the file tools may touch. Plain markdown you can edit by hand. |
+| [`docs/`](docs/) | Four build manuals, from "what is an agent" to the HUD and the threat model. |
+| [`vendor/`](vendor/) | The graph library, committed, so both surfaces work with no network. |
+
+Each of those folders has its own README explaining what is inside and why.
+
 ```
 EYES  iris vectors, 9 point calibration  ---+
 HANDS 21 landmarks per hand               |
