@@ -65,6 +65,12 @@ jarvis = ["prompts/*.md", "graph/*.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# `python -m pytest` puts the working directory on sys.path; bare `pytest`
+# does not. Two test modules import `tests.conftest`, so the suite passed
+# every time it was run one way and failed to even collect the other, which
+# is how a green local run and a red CI run described the same code. Put the
+# repo root on the path explicitly so the invocation stops mattering.
+pythonpath = ["."]
 # Bridge tests wait on a websocket message. When a regression means that
 # message never arrives, the read blocks forever: the suite hangs instead of
 # going red, which is the one failure mode CI cannot report. Cap it.
