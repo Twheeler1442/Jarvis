@@ -29,7 +29,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,bridge]"
+          scripts/ci-step.sh "Install" pip install -e ".[dev,bridge]"
 
       - name: Lint the roster
         # Refuses a map that contradicts itself: one supervisor with a
@@ -37,11 +37,11 @@ jobs:
         # for every send key, a real boolean gate on every write, no tool or
         # door above its owner's ceiling, a cap on every door, and no gesture
         # that authorizes.
-        run: python -m jarvis.graph.build_graph --check
+        run: scripts/ci-step.sh "Lint the roster" python -m jarvis.graph.build_graph --check
 
       - name: Rebuild the map and fail if it is not committed
         run: |
-          python -m jarvis.graph.build_graph
+          scripts/ci-step.sh "Rebuild the map" python -m jarvis.graph.build_graph
           if ! git diff --quiet -- dashboard/graph.json hud/graph.json \
                dashboard/index.html hud/index.html; then
             {
@@ -58,16 +58,16 @@ jobs:
           fi
 
       - name: Audit the doors
-        run: python -m jarvis.tools.connectors
+        run: scripts/ci-step.sh "Audit the doors" python -m jarvis.tools.connectors
 
       - name: Tests
-        run: pytest -q
+        run: scripts/ci-step.sh "Tests" pytest -q
 
       - name: Live bridge check over a real socket
         # Proves the real transport path, not just the in-process ASGI client:
         # gate raised, voice surface refused, wrong code refused, replay is a
         # no-op, correct code approves, halt rejects.
-        run: python tests/live_check.py
+        run: scripts/ci-step.sh "Live bridge check" python tests/live_check.py
 
       - name: Say what broke, where it can be read
         # A failed step reports only "exit code N" in the annotation, and the
@@ -116,7 +116,7 @@ jobs:
           for i in $(seq 1 20); do curl -sf http://127.0.0.1:8099/ >/dev/null && break; sleep 0.5; done
 
       - name: Browser smoke test
-        run: python tests/browser_check.py http://127.0.0.1:8099 /tmp/shots
+        run: scripts/ci-step.sh "Browser smoke test" python tests/browser_check.py http://127.0.0.1:8099 /tmp/shots
 
       - uses: actions/upload-artifact@v4
         if: always()
