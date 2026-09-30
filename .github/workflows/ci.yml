@@ -6,6 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A second push supersedes the first. Cancel the older run instead of paying
+# for a verdict on a commit nobody is waiting for any more.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -36,8 +42,20 @@ jobs:
       - name: Rebuild the map and fail if it is not committed
         run: |
           python -m jarvis.graph.build_graph
-          git diff --exit-code -- dashboard/graph.json hud/graph.json \
-            dashboard/index.html hud/index.html
+          if ! git diff --quiet -- dashboard/graph.json hud/graph.json \
+               dashboard/index.html hud/index.html; then
+            {
+              echo "### The committed map is stale"
+              echo "\`python -m jarvis.graph.build_graph\` changed these files."
+              echo "Run it locally and commit the result."
+              echo '```diff'
+              git diff --stat -- dashboard/graph.json hud/graph.json \
+                dashboard/index.html hud/index.html
+              git diff -- dashboard/graph.json hud/graph.json | head -60
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Audit the doors
         run: python -m jarvis.tools.connectors
@@ -50,6 +68,29 @@ jobs:
         # gate raised, voice surface refused, wrong code refused, replay is a
         # no-op, correct code approves, halt rejects.
         run: python tests/live_check.py
+
+      - name: Say what broke, where it can be read
+        # A failed step reports only "exit code N" in the annotation, and the
+        # raw logs need an authenticated token to fetch. The step summary is
+        # readable from the check-run API, so put the evidence there.
+        if: failure()
+        run: |
+          {
+            echo "## test job failed"
+            echo '```'
+            echo "python:   $(python -V 2>&1)"
+            echo "platform: $(uname -sr)"
+            echo "pytest:   $(python -m pytest --version 2>&1 | head -1)"
+            echo '```'
+            echo "### Working tree after the run"
+            echo '```'
+            git status --porcelain || true
+            echo '```'
+            echo "### Installed packages"
+            echo '```'
+            pip freeze 2>/dev/null | head -50
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   surfaces:
     # The HUD and dashboard are the part a test file cannot fully vouch for.
