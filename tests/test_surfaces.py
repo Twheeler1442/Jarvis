@@ -108,6 +108,18 @@ def test_no_graph_library_still_shows_the_roster(page):
     assert "Graph library did not load." in text
 
 
+@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.parent.name)
+def test_node_draw_guards_against_non_finite_coordinates(page):
+    """A node can be drawn before the layout has placed it. createRadialGradient
+    throws on NaN, and a throw in the draw callback kills the render loop for
+    good, which shows up as a permanently black canvas."""
+    text = page.read_text(encoding="utf-8")
+    assert "if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) return;" in text
+    guard = text.index("if (!Number.isFinite(n.x)")
+    gradient = text.index("ctx.createRadialGradient(")   # the call, not the comment
+    assert guard < gradient, "the guard must come before the first gradient call"
+
+
 def test_hud_falls_back_when_fetch_fails():
     text = (REPO / "hud" / "index.html").read_text(encoding="utf-8")
     assert ".catch(() => boot(SNAPSHOT))" in text

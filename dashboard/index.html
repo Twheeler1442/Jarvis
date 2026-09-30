@@ -218,6 +218,9 @@ function dim(n) {
 }
 
 function draw(n, ctx, scale) {
+  // See the HUD: a non-finite coordinate on an early frame makes
+  // createRadialGradient throw, and that throw kills the render loop.
+  if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) return;
   const r = radius(n);
   const faded = dim(n);
   const alpha = faded ? 0.18 : 1;

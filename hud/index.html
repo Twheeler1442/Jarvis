@@ -223,6 +223,10 @@ function radius(n) {
 }
 
 function drawNode(n, ctx, scale) {
+  // The first frames can arrive before the layout has assigned coordinates.
+  // createRadialGradient throws on a non-finite value, and a throw here kills
+  // the render loop for good: a permanently black canvas, not a dropped frame.
+  if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) return;
   const r = radius(n), ring = STATUS[n.status] || "#5b6478";
   if (n.type === "core") {
     const g = ctx.createRadialGradient(n.x, n.y, 2, n.x, n.y, r * 2.6);
