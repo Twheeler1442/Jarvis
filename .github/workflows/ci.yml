@@ -26,10 +26,19 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install
+      - name: Environment
+        # ::notice:: becomes an annotation, and annotations are the only part of
+        # a run readable without an authenticated token. Record what we are
+        # actually running on before anything can fail.
         run: |
-          python -m pip install --upgrade pip
-          scripts/ci-step.sh "Install" pip install -e ".[dev,bridge]"
+          echo "::notice title=env::python=$(python -V 2>&1) | pip=$(pip -V 2>&1 | cut -c1-60) | os=$(uname -sr) | pwd=$(pwd)"
+
+      - name: Install
+        # The whole step goes through the helper, including the pip upgrade, so
+        # a failure on any line of it reaches an annotation.
+        run: >
+          scripts/ci-step.sh "Install"
+          bash -c 'python -m pip install --upgrade pip && pip install -e ".[dev,bridge]"'
 
       - name: Lint the roster
         # Refuses a map that contradicts itself: one supervisor with a
